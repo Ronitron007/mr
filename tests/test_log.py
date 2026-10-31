@@ -65,6 +65,8 @@ FIXTURES = {
         applied={"route": "cascade", "ladder": ["G-x"]},
         sources={"route": "default"},
         invariant_violation=False,
+        judge=None,
+        classifier=None,
     ),
     "task": _common(
         role="task",
@@ -81,6 +83,9 @@ FIXTURES = {
         verified=True,
         final_signals={"H": True},
         cost={"claude_pts": 0, "usd_equiv": 0.0, "units": 1.0},
+        shadow={"judge": None, "classifier": None},
+        text_redacted="fix typo",
+        feature_hash="0123456789abcdef",
     ),
     "guard": {
         **_common(task=None, role="guard"),

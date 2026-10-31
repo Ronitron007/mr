@@ -1,8 +1,9 @@
-"""Rules-only router (mr-spec §5.3, §9.2). Judge and classifier are ignored in v1."""
+"""Rules-only router (mr-spec §5.3, §9.2). Shadow judge and classifier answers are logged, never applied."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mr import shadow
 from mr.config import Config, _match
 from mr.prepass import Features
 from mr.task import Task
@@ -40,8 +41,8 @@ class Decision:
 
 
 def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None) -> Decision:
-    """Merge params and prepass rules. ``judge`` and ``clf`` are accepted and ignored."""
-    del judge, clf
+    """Merge params and prepass rules. ``judge`` and ``clf`` are shadow answers: they never change the
+    decision and are logged by ``route_record``."""
     reasons: list[str] = []
     kind, type_src = _resolve_type(task, f)
     difficulty, diff_src = _resolve_difficulty(task, f, reasons)
@@ -111,8 +112,8 @@ def check_invariants(d: Decision, f: Features, task: Task, cfg: Config) -> None:
             raise InvariantError("I3")
 
 
-def route_record(task: Task, f: Features, d: Decision) -> dict:
-    """§7.4 route record. v1 does not append it."""
+def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None) -> dict:
+    """§7.4 route record; pipeline.start appends it. ``judge``/``clf`` are shadow answers or None."""
     rules = {
         "route": d.route,
         "type": d.type,
@@ -128,8 +129,8 @@ def route_record(task: Task, f: Features, d: Decision) -> dict:
         "fingerprint": task.fingerprint,
         "prepass_confident": f.confident,
         "rules": rules,
-        "judge": None,
-        "classifier": None,
+        "judge": shadow.route_summary(judge),
+        "classifier": shadow.route_summary(clf),
         "applied": applied,
         "sources": dict(d.sources),
         "invariant_violation": False,

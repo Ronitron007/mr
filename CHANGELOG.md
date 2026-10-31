@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Logging seam for the shadow judge and classifier: new redaction helper (secrets, tokens, emails and phone-like
+  numbers become `<redacted:...>` markers), route records can carry shadow answers, and the task record now has
+  `text_redacted` (redacted task text, first 4000 characters), `feature_hash` and the shadow summaries. No model
+  calls and no routing change yet.
+
 - No hourly Claude cap by default: `claude_limits.hour_max` defaults to null (no hourly check in the rung guard,
   advisor gate or judge yield; a missing hourly reading is not a deny when unset). `five_hour_max: 85`,
   reservations, probes and the Claude lock are unchanged; setting `hour_max` explicitly still enables the cap.

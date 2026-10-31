@@ -6,6 +6,7 @@ runs `loop.run_task` (the full ladder, L1).
 """
 from __future__ import annotations
 
+import dataclasses
 import hashlib
 import json
 import os
@@ -15,7 +16,8 @@ import time
 import traceback
 
 from mr import exitcodes as ec
-from mr import config, hygiene, isolation, loop, patches, pipeline, prepass, router, runners, scope, skillsync, state
+from mr import (config, hygiene, isolation, loop, patches, pipeline, prepass, redact, router, runners, scope,
+                shadow, skillsync, state)
 from mr.log import Log, now_ist
 from mr.task import Params, TaskError, load_task, normalise
 
@@ -62,6 +64,8 @@ class _Ctx:
         self.counters = {"attempts": 0, "claude_rungs": 0, "opus_rungs": 0}  # loop.count_after
         self.checklist = None
         self.replans = self.n_plan = self.n_review = self.seq = 0
+        self.shadow_judge = self.shadow_clf = None  # shadow.ShadowAnswer, set by later steps
+        self.n_clf = 0  # classifier calls made
         self.effort_up_used: list[str] = []
         self.locked: tuple[str, ...] = ()
         self.lockdoc = None
@@ -397,6 +401,14 @@ def _caller() -> str | None:
         return None
 
 
+def _feature_hash(feats) -> str | None:
+    """First 16 hex of sha256 over the prepass Features as canonical JSON, or None without features."""
+    if feats is None:
+        return None
+    doc = {k: sorted(v) if isinstance(v, (set, frozenset)) else v for k, v in dataclasses.asdict(feats).items()}
+    return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:16]
+
+
 def _task_record(c: _Ctx, ended: str) -> dict:
     d, task, last = c.d, c.task, (c.rungs[-1] if c.rungs else None)
     esc = {k: sum(r["class"] == k for r in c.rungs) for k in ("skipped", "tried_wrong", "spec_suspect", "off_track")}
@@ -412,10 +424,14 @@ def _task_record(c: _Ctx, ended: str) -> dict:
         "base": task.base[:12], "text_sha": hashlib.sha256(normalise(task.text).encode()).hexdigest()[:16],
         "title": _title(task.text), "caller": _caller(), "type": d.type, "difficulty": d.difficulty, "risk": d.risk,
         "risk_tags": sorted(d.risk_tags), "route": d.route, "route_src": d.sources.get("route"),
-        "shadow": {"judge": None, "classifier": None}, "ladder": list(c.ladder),
+        "shadow": {"judge": shadow.task_summary(getattr(c, "shadow_judge", None)),
+                   "classifier": shadow.task_summary(getattr(c, "shadow_clf", None))},
+        "text_redacted": redact.redact(task.text)[0][:4000],
+        "feature_hash": _feature_hash(getattr(c, "feats", None)),
+        "ladder": list(c.ladder),
         "first_rung": c.rung, "final_rung": ran[-1] if ran else c.rung,
         "attempts": {"impl": c.counters["attempts"], "review": c.n_review, "plan": c.n_plan,
-                     "classifier": 0},
+                     "classifier": getattr(c, "n_clf", 0)},
         "esc": esc,
         "outcome": c.outcome, "exit": c.exit, "verified": False,
         "final_signals": dict(last["signals"]) if last else None, "cost": dict(c.cost),

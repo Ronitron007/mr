@@ -53,6 +53,13 @@ def _req_dict(rec: dict, key: str, problems: list[str]) -> None:
         problems.append(f"{key} must be dict")
 
 
+def _req_opt_dict(rec: dict, key: str, problems: list[str]) -> None:
+    if key not in rec:
+        problems.append(f"missing {key}")
+    elif rec[key] is not None and not isinstance(rec[key], dict):
+        problems.append(f"{key} must be dict or None")
+
+
 def _req_opt_int(rec: dict, key: str, problems: list[str]) -> None:
     if key not in rec:
         problems.append(f"missing {key}")
@@ -145,7 +152,16 @@ def check(record: dict) -> list[str]:
             problems.append("applied.ladder must be list")
         _req_dict(record, "sources", problems)
         _req_bool(record, "invariant_violation", problems)
+        for key in ("judge", "classifier"):
+            _req_opt_dict(record, key, problems)
     elif role == "task":
+        if not isinstance(record.get("shadow"), dict):
+            problems.append("shadow must be dict")
+        else:
+            for key in ("judge", "classifier"):
+                _req_opt_dict(record["shadow"], key, problems)
+        _req_opt_str(record, "text_redacted", problems)
+        _req_opt_str(record, "feature_hash", problems)
         _req_str(record, "started_at", problems)
         _req_str(record, "ended_at", problems)
         _req_int(record, "wall_s", problems)
@@ -197,6 +213,10 @@ def check(record: dict) -> list[str]:
                 problems.append(f"missing {key}")
         if not isinstance(record.get("violations", []), list):
             problems.append("violations must be list")
+    elif role in ("judge", "classifier"):  # judge-spec §7.4 shadow call records
+        for key in ("ref", "status", "mode") + (("use", "qset", "model_req") if role == "judge" else ("model",)):
+            _req_str(record, key, problems)
+        _req_opt_int(record, "latency_ms", problems)
     else:
         problems.append("unknown role")
     return problems
