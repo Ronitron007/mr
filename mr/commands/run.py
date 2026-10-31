@@ -14,9 +14,11 @@ import signal
 import sys
 import time
 import traceback
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 
 from mr import exitcodes as ec
-from mr import (config, hygiene, isolation, loop, patches, pipeline, prepass, redact, router, runners, scope,
+from mr import (classifier, config, hygiene, isolation, loop, patches, pipeline, prepass, redact, router, runners, scope,
                 shadow, skillsync, state)
 from mr.log import Log, now_ist
 from mr.task import Params, TaskError, load_task, normalise
@@ -66,6 +68,8 @@ class _Ctx:
         self.replans = self.n_plan = self.n_review = self.seq = 0
         self.shadow_judge = self.shadow_clf = None  # shadow.ShadowAnswer, set by later steps
         self.n_clf = 0  # classifier calls made
+        self.clf_pool = self.clf_future = self.clf_skip = self.clf_ref = None  # see _start_classifier
+        self.clf_consulted = False
         self.effort_up_used: list[str] = []
         self.locked: tuple[str, ...] = ()
         self.lockdoc = None
@@ -262,6 +266,7 @@ def run(args) -> int:
     else:  # --rung X without --once puts X first, like --prefer
         ladder = ([args.rung] if args.rung else []) + [r for r in decision.ladder if r != args.rung]
     c = _Ctx(args, cfg, task, feats, decision, ladder, t0, started_at)
+    _start_classifier(c)
     old = _install_handlers(c)
     try:
         try:
@@ -291,6 +296,54 @@ def run(args) -> int:
         skillsync.notify("run-end")
     _output(c)
     return c.exit
+
+
+def _clf_result(c: _Ctx, status: str, calls: int):
+    return classifier.ClassifyResult(None, status, calls, None, classifier.prompt_sha(), c.clf_ref, {},
+                                     (c.cfg.classifier or {}).get("model", ""))
+
+
+def _start_classifier(c: _Ctx) -> None:
+    """Shadow classifier: decide whether it runs and start it in a background thread. It never acts."""
+    block = c.cfg.classifier or {}
+    if shadow.effective_mode(getattr(c.args, "classifier", None), block) != "shadow":
+        return
+    task = c.task
+    c.clf_ref = f"c-{task.id}-1"
+    run_it, c.clf_consulted = shadow.should_run(task.params, c.feats.confident, task.fingerprint,
+                                                block.get("sample_n", 3))
+    if not run_it:
+        c.clf_skip = _clf_result(c, "skipped_confident", 0)
+        c.shadow_clf = classifier.to_shadow(c.clf_skip, False, c.cfg)
+        return
+    c.clf_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="mr-classifier")
+    c.clf_future = c.clf_pool.submit(lambda: classifier.classify(task, c.feats, c.cfg, ref=c.clf_ref))
+    c.shadow_clf = classifier.to_shadow(_clf_result(c, "pending", 0), c.clf_consulted, c.cfg)
+
+
+def _join_classifier(c: _Ctx) -> None:
+    """Log the shadow classifier's record before the task record. Every failure is logged and ignored."""
+    try:
+        if c.clf_skip is not None:
+            res = c.clf_skip
+        elif c.clf_future is None:
+            return
+        else:
+            try:
+                res = c.clf_future.result(timeout=(c.cfg.classifier or {}).get("join_timeout_s", 75))
+            except FutureTimeout:
+                res = _clf_result(c, "timeout", 1)
+                runners.kill_all_children()  # only the classifier child is left at task end
+            except Exception:
+                res = _clf_result(c, "cli_error", 1)
+        c.n_clf = res.calls
+        c.shadow_clf = classifier.to_shadow(res, c.clf_consulted, c.cfg)
+        c.log.append(classifier.record(res, c.task, "shadow", c.clf_consulted))
+    except Exception as e:
+        _say(f"could not log the classifier: {e}")
+    finally:
+        if c.clf_pool is not None:
+            c.clf_pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _body(c: _Ctx) -> int:
@@ -467,6 +520,7 @@ def _finalize(c: _Ctx) -> None:
         c.save_state("done")
     except Exception as e:
         _say(f"could not write state.json: {e}")
+    _join_classifier(c)
     c.log.append(_task_record(c, now_ist()))
 
 

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import sys
 from dataclasses import dataclass
 
 _OK = frozenset({"ok", "ok_partial", "cache_hit"})
@@ -57,3 +58,12 @@ def should_run(params, prepass_confident: bool, fingerprint: str, sample_n: int 
     if sample_n <= 0:
         return False, False
     return int(hashlib.sha256(fingerprint.encode()).hexdigest()[:8], 16) % sample_n == 0, False
+
+
+def effective_mode(cli: str | None, block: dict | None, name: str = "classifier") -> str:
+    """CLI value if given, else the config block's mode, else off. ``on`` is not built: it runs as shadow."""
+    mode = cli or (block or {}).get("mode") or "off"
+    if mode == "on":
+        print(f"{name} on not built; running as shadow", file=sys.stderr)
+        return "shadow"
+    return mode

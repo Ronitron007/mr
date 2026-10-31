@@ -485,6 +485,12 @@ def _classifier(raw: dict, patterns: list[str]) -> None:
         raise ConfigError(f"classifier.model: {key!r} matches no unscoped allowed entry")
     if "mode" in block:
         _canon_mode(block["mode"], "classifier.mode")
+    n = block.get("sample_n", 0)
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        raise ConfigError(f"classifier.sample_n: {n!r} must be an integer >= 0")
+    wait = block.get("join_timeout_s", 1)
+    if not isinstance(wait, (int, float)) or isinstance(wait, bool) or not math.isfinite(wait) or wait <= 0:
+        raise ConfigError(f"classifier.join_timeout_s: {wait!r} must be a number > 0")
 
 
 def _canon_mode(value, path: str) -> str:

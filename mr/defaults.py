@@ -59,7 +59,7 @@ worktrees: {per_repo: 3, box: 6, queue_min: 10, stale_h: 24, unmerged_keep_d: 14
 advisor: {mode: "on", rows_off: [], injection: adv.v2, max_consults: 1, reserve_pts: 12, per_hour_box: 3, per_day_box: 10,   # T20; advisor-consult-spec §11
           transcript_cap_tokens: {early: 150000, final: 150000, audit_max: 180000}, timeouts_s: {slow: 150, stall: 300},
           monitor: {window_pairs: 20, min_pairs: 10, harm_rate_max: 0.05, relay_alarm_below: 0.5, usd_p90_max: 0.80}}
-classifier: {model: grok-4.7-low, mode: off, timeout_s: 30, min_conf: 0.6, cache_days: 7}   # optional block; deferred (§0.2)
+classifier: {model: grok-4.7-low, mode: off, timeout_s: 30, min_conf: 0.6, cache_days: 7, sample_n: 3, join_timeout_s: 75}   # optional block; deferred (§0.2)
 
 judge:
   mode: "off"                     # off | shadow | on. Optional block; `off` until Phase 2 builds the judge, then `shadow`

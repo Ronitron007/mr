@@ -6,6 +6,7 @@ import os
 import sys
 from dataclasses import asdict
 
+from mr import classifier, shadow
 from mr import exitcodes as ec
 from mr.config import ConfigError, load
 from mr.gitmeta import read_head
@@ -21,14 +22,17 @@ def run(args) -> int:
     if not isinstance(text, str) or text.strip() == "":
         print("task text missing", file=sys.stderr)
         return ec.USAGE
-    if not getattr(args, "no_models", False):
-        print("judge/classifier not built", file=sys.stderr)
+    models = not getattr(args, "no_models", False)
+    if models and getattr(args, "judge", None) in ("shadow", "on"):
+        print("judge not built", file=sys.stderr)
     try:
         cfg = load(getattr(args, "config", None))
         repo = os.path.abspath(getattr(args, "repo", None) or os.getcwd())
         task = make_task(text, repo, read_head(repo), _params(args))
         features = extract(task, None)
         decision = decide(task, features, cfg)
+        mode = shadow.effective_mode(getattr(args, "classifier", None), cfg.classifier or {}) if models else "off"
+        clf = _shadow_classifier(args, cfg, task, features, mode)
     except (TaskError, RouteError) as exc:
         print(str(exc), file=sys.stderr)
         return ec.USAGE
@@ -37,10 +41,40 @@ def run(args) -> int:
         return ec.USAGE
     code = _exit_code(decision)
     if getattr(args, "json", False):
-        print(json.dumps(_payload(task, features, decision, code), ensure_ascii=False))
+        payload = _payload(task, features, decision, code)
+        if mode == "shadow":
+            payload["classifier_shadow"] = shadow.route_summary(clf)
+        print(json.dumps(payload, ensure_ascii=False))
     else:
         print(_explain(task, decision, features))
+        if clf is not None:
+            print(_clf_line(clf))
     return code
+
+
+def _shadow_classifier(args, cfg, task, features, mode):
+    """Run the classifier in shadow when the mode says so; a ShadowAnswer or None. Never changes the decision."""
+    cli = getattr(args, "classifier", None)
+    block = cfg.classifier or {}
+    if mode != "shadow":
+        return None
+    run_it, consulted = shadow.should_run(task.params, features.confident, task.fingerprint,
+                                          block.get("sample_n", 3))
+    if not (run_it or cli == "shadow"):
+        return None
+    ref = f"c-{task.id}-1"
+    try:
+        res = classifier.classify(task, features, cfg, ref=ref)
+    except Exception:
+        res = classifier.ClassifyResult(None, "cli_error", 1, None, classifier.prompt_sha(), ref, {},
+                                        block.get("model", ""))
+    return classifier.to_shadow(res, consulted, cfg)
+
+
+def _clf_line(ans) -> str:
+    conf = "-" if ans.confidence is None else ans.confidence
+    return (f"classifier (shadow): type={ans.type or '-'} difficulty={ans.difficulty or '-'} "
+            f"risk={ans.risk or '-'} route={ans.route or '-'} conf={conf} status={ans.status}")
 
 
 def _params(args) -> Params:

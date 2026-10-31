@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Shadow classifier wired into `mr run` and `mr route`. With `--classifier shadow` (or `classifier.mode: shadow`) a
+  background thread asks the cheap model beside the rules; its answer is logged and joined at task end (timeout
+  `classifier.join_timeout_s`, default 75 s) and never changes routing, rungs, review or exit codes. Confident tasks are
+  sampled 1 in `classifier.sample_n` (default 3). `on` runs as shadow with a stderr note. `mr route` prints a
+  `classifier (shadow):` line and a `classifier_shadow` JSON key, and no longer prints "judge/classifier not built".
+  The default mode stays off.
+
 - Classifier client for the shadow classifier: a fixed prompt template, a strict reader for the cheap model's JSON
   answer (one repair retry), a seven-day answer cache and a log record. It runs the model with no file access from an
   empty work folder and never with a Claude model. Nothing calls it yet, so routing is unchanged.
