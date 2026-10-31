@@ -195,7 +195,7 @@ def advisor_rung(c, rung: str) -> str:
     else:
         g = guard.check("S+A", cfg)  # pre-check only, no reservation; fail safe on guard errors
         lim = cfg.claude_limits
-        guard_in = {"hour": g.hour if _num(g.hour) else lim.hour_max,
+        guard_in = {"hour": g.hour if _num(g.hour) else lim.hour_max,  # None when no hourly cap
                     "reserved": g.reserved,
                     "five_hour_pct": g.five_hour if _num(g.five_hour) else lim.five_hour_max,
                     "hour_max": lim.hour_max,

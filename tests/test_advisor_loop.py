@@ -97,7 +97,7 @@ class TestAdvisorRungs(AdvisorLoopCase):
         self.set_scenario(
             {"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [{"result": REVIEW_PASS}]},
              "claude": {"claude-sonnet-5-5": [mul("*")]}},
-            check={"default": dict(CHECK_DEFAULT, hour_usage=24)})
+            check={"default": dict(CHECK_DEFAULT, five_hour_pct=74)})
         code, doc, err = self.run_json("--type", "bugfix", "--difficulty", "hard", "--rung", "S+",
                                        text=SF_TEXT)
         self.assertEqual(code, 0, err)

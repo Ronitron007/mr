@@ -330,7 +330,7 @@ class TestLockAndGuard(RunCase):
 
     def test_guard_deny_75(self):
         self.set_scenario({"claude": {"claude-sonnet-5-5": [{}]}},
-                          check={"default": dict(CHECK_DEFAULT, hour_usage=39)})
+                          check={"default": dict(CHECK_DEFAULT, five_hour_pct=84)})
         code, out, err = self.mr(json_out=True, rung="S")
         self.assertEqual(code, 75, err)
         self.assertEqual(self.calls(), [])

@@ -34,12 +34,11 @@ CHECK_DEFAULT = {
 }
 
 
-def make_cfg(home):
-    raw = config._deep_merge(
-        defaults(),
-        {"paths": {"check": gitfix.FAKE_CHECK, "home": home, "claude": "/nonexistent/fake-claude"}},
-    )
-    return config.from_dict(raw)
+def make_cfg(home, claude_limits=None):
+    over = {"paths": {"check": gitfix.FAKE_CHECK, "home": home, "claude": "/nonexistent/fake-claude"}}
+    if claude_limits is not None:
+        over["claude_limits"] = claude_limits
+    return config.from_dict(config._deep_merge(defaults(), over))
 
 
 def _rc(rc, **kw):
@@ -150,11 +149,12 @@ class TestCheck(GuardCase):
         self.assertFalse(os.path.exists(self.check_path + ".calls"))
 
     def test_boundaries(self):
-        guard.reserve(self.cfg, "other", "S", 3)
+        cfg = make_cfg(self.home, {"hour_max": 30, "five_hour_max": 85})  # explicit hourly opt-in
+        guard.reserve(cfg, "other", "S", 3)
         for hour, allow in ((21, True), (22, False)):
             with self.subTest(hour=hour):
                 self.set_check({"default": {**CHECK_DEFAULT, "hour_usage": hour}})
-                res = guard.check("S+", self.cfg)
+                res = guard.check("S+", cfg)
                 self.assertEqual((res.hour, res.reserved, res.est), (hour, 3.0, 6.0))
                 self.assertEqual(res.allow, allow, res)
                 if not allow:
@@ -170,15 +170,8 @@ class TestCheck(GuardCase):
 
     def test_shared_claude_limits(self):
         """Guard allow/deny and judge_should_yield use one claude_limits block."""
-        self._pin_shared(self.cfg)
-        raw = config._deep_merge(
-            defaults(),
-            {
-                "paths": {"check": gitfix.FAKE_CHECK, "home": self.home, "claude": "/nonexistent/fake-claude"},
-                "claude_limits": {"hour_max": 10, "five_hour_max": 40},
-            },
-        )
-        self._pin_shared(config.from_dict(raw))
+        self._pin_shared(make_cfg(self.home, {"hour_max": 30, "five_hour_max": 85}))
+        self._pin_shared(make_cfg(self.home, {"hour_max": 10, "five_hour_max": 40}))
 
     def _pin_shared(self, cfg):
         lim = cfg.claude_limits

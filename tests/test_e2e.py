@@ -112,8 +112,8 @@ class TestScenarioMatrix(LoopCase):
         self.set_scenario(
             {"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul_file("+")]},
              "claude": {SONNET: [{}]}},
-            check={"default": {"hour_usage": 39, "limit": 40, "unit": "points", "exceeded": False,
-                               "five_hour_pct": 30.0, "five_hour_resets_at": "2026-10-30T05:00:00Z",
+            check={"default": {"hour_usage": 10, "limit": 40, "unit": "points", "exceeded": False,
+                               "five_hour_pct": 84.0, "five_hour_resets_at": "2026-10-30T05:00:00Z",
                                "seven_day_pct": 12.0, "sample_age_s": 30, "samples_in_hour": 3,
                                "has_baseline": True, "checked_at": "2026-10-30T00:00:00Z"}})
         code, doc, err = self.run_json("--type", "bugfix", "--difficulty", "medium", "--rung", "S")

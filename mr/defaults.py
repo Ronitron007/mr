@@ -49,7 +49,7 @@ caps: {attempts: {trivial: 3, easy: 3, medium: 4, hard: 4, critical: 4}, claude_
 timeouts: {rung_s: {cursor: 900, claude: 900}, planner_s: 600, reviewer_s: 600, hygiene_s: 600, acceptance_s: 300}   # §10.4
 hygiene: {commands: {}}   # per repo (§10.3); exact script names from the repo's package.json
 fallback_claude_denied: [G-x]   # non-Anthropic only; cursor_same_tier removed (hard rule §0.3)
-claude_limits: {hour_max: 30, five_hour_max: 85}   # shared by the rung guard and the judge
+claude_limits: {hour_max: null, five_hour_max: 85}   # hour_max null = no hourly cap; five_hour_max shared by the rung guard and the judge
 guard: {probe_if_sample_older_s: 600, wait_lock_s: 600,   # est held constant in v1 (§8)
         est_seed: {S: 4, S+: 6, S+A: 12, O: 10, O+: 15, PLAN_O: 12, C+: 3}, reservation_ttl_s: 3600}
 review: {map: {grok: S, kimi: G-h, composer: G-h, claude: G-x}, high_risk_grok: S, tiebreak: S, claude_denied: C25}

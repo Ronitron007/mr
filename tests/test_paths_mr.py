@@ -97,7 +97,7 @@ class TestPortableConfig(unittest.TestCase):
         self.assertIsInstance(DEFAULT_YAML, str)
         self.assertEqual(raw['paths']['cursor_agent'], 'cursor-agent')
         self.assertEqual(raw['version'], 1)
-        self.assertEqual(raw['claude_limits'], {'hour_max': 30, 'five_hour_max': 85})
+        self.assertEqual(raw['claude_limits'], {'hour_max': None, 'five_hour_max': 85})
         self.assertEqual(raw['rungs']['G-l']['model'], 'grok-4.7-low')
         self.assertEqual(raw['rungs']['S']['effort'], 'high')
         self.assertEqual(raw['caps']['opus_rungs_per_task'], 1)

@@ -24,7 +24,7 @@ SONNET_MODEL = "claude-sonnet-5-5"
 USD_IN, USD_OUT, OUT_TOK_EST = 4e-6, 20e-6, 1900  # §4.3, rates derived from the trial
 S_PLUS_PTS = 6
 _LIM = config.defaults()["claude_limits"]
-GUARD = {"hour_max": _LIM["hour_max"], "five_hour_max": _LIM["five_hour_max"]}  # claude_limits
+GUARD = {"hour_max": _LIM.get("hour_max"), "five_hour_max": _LIM["five_hour_max"]}  # claude_limits
 DEFAULTS: dict = config.ADVISOR_DEFAULTS  # §11
 ERROR_CODES = frozenset({"max_uses_exceeded", "too_many_requests", "overloaded", "prompt_too_long",
                          "execution_time_exceeded", "model_not_found", "unavailable"})
@@ -171,8 +171,9 @@ def _table(inp: dict) -> tuple[str, tuple[str, ...], str]:
 def _fits(guard: dict, pts: float) -> bool:
     """G1: same rule as the rung guard, with ``pts`` the advisor reservation (S+A est)."""
     g = {**GUARD, **{k: v for k, v in guard.items() if k in GUARD}}
-    return (guard.get("hour", 0) + guard.get("reserved", 0) + pts <= g["hour_max"]
-            and guard.get("five_hour_pct", 0) + pts <= g["five_hour_max"])
+    hour_ok = (g["hour_max"] is None
+               or (guard.get("hour") or 0) + guard.get("reserved", 0) + pts <= g["hour_max"])
+    return hour_ok and guard.get("five_hour_pct", 0) + pts <= g["five_hour_max"]
 
 
 def decide(inp: dict, cfg_advisor: dict | None) -> AdvisorDecision:

@@ -401,7 +401,7 @@ class TestPlan(unittest.TestCase):
         self.assertIn(_OPUS, calls[0]["argv"])
 
     def test_opus_denied_falls_back_to_g_h(self):
-        self._scenario([{"result": self._valid_json()}], claude=[{}], check={"hour_usage": 39})
+        self._scenario([{"result": self._valid_json()}], claude=[{}], check={"five_hour_pct": 84})
         result = self._plan("hard")
         self.assertTrue(result.ok, result.errors)
         self.assertEqual(result.rung, "G-h")

@@ -163,6 +163,7 @@ class TestDecide(unittest.TestCase):
     def test_gates(self):  # AC-ADV-3
         def run(**over):
             inp = _base()
+            inp["guard"]["hour_max"] = 30  # explicit hourly opt-in; the default has no hourly cap
             for key, val in over.items():
                 if key in ("hour", "five_hour_pct", "reserved"):
                     inp["guard"][key] = val

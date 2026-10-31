@@ -174,9 +174,11 @@ def _check(rung: str, cfg, now: float | None) -> GuardResult:
         if sample.get("exceeded") is True:
             return result(False, "over_limit")
     hour, fiveh = sample.get("hour_usage"), sample.get("five_hour_pct")
+    lim = cfg.claude_limits
     if not _num(hour):
         hour = None
-        return result(False, "guard error")
+        if lim.hour_max is not None:
+            return result(False, "guard error")
     if not _num(fiveh):
         fiveh = None
         return result(False, "no 5h baseline")
@@ -184,8 +186,7 @@ def _check(rung: str, cfg, now: float | None) -> GuardResult:
         reserved = reserved_total(cfg, now) + 0.0  # + judge_recent: always 0 in v1 (judge deferred)
     except (OSError, ValueError):
         return result(False, "guard error")
-    lim = cfg.claude_limits
-    if hour + reserved + est > lim.hour_max:
+    if lim.hour_max is not None and hour + reserved + est > lim.hour_max:
         return result(False, "budget")
     if fiveh + est > lim.five_hour_max:
         return result(False, "five_hour")
@@ -195,12 +196,14 @@ def _check(rung: str, cfg, now: float | None) -> GuardResult:
 def judge_should_yield(cfg, hour, five_hour_pct) -> bool:
     """The judge's yield, from the same ``claude_limits`` block the rung guard reads.
 
-    Yields when the current reading has ``hour >= hour_max`` or
+    Yields when ``hour >= hour_max`` (only when hour_max is set) or
     ``five_hour_pct >= five_hour_max``. The S+A estimate stays inside ``est``
     on the rung side; this comparison does not add it.
     """
     lim = cfg.claude_limits
-    return hour >= lim.hour_max or five_hour_pct >= lim.five_hour_max
+    if lim.hour_max is not None and hour >= lim.hour_max:
+        return True
+    return five_hour_pct >= lim.five_hour_max
 
 
 def _log(cfg, res: GuardResult, rung: str, task, delta=None, wrapper_denied=False) -> None:

@@ -405,7 +405,7 @@ class TestModelRoles(unittest.TestCase):  # model roles
         self.assertNotIn("five_hour_max", raw["guard"])
         self.assertNotIn("yield_at_hour_usage", raw["judge"]["budget"])
         self.assertNotIn("yield_at_five_hour_pct", raw["judge"]["budget"])
-        self.assertEqual(raw["claude_limits"], {"hour_max": 30, "five_hour_max": 85})
+        self.assertEqual(raw["claude_limits"], {"hour_max": None, "five_hour_max": 85})
 
     def test_legacy_limits_map(self):
         from mr.config import ConfigError, load
@@ -450,18 +450,18 @@ class TestModelRoles(unittest.TestCase):  # model roles
 
         # legacy mappings that are not legal claude_limits values keep the default
         cfg = load(overrides={"guard": {"limit": 5, "margin": 5}})
-        self.assertEqual((cfg.claude_limits.hour_max, cfg.claude_limits.five_hour_max), (30, 85))
+        self.assertEqual((cfg.claude_limits.hour_max, cfg.claude_limits.five_hour_max), (None, 85))
         self.assertTrue(any("keeping default" in w for w in cfg.warnings))
 
         cfg = load(overrides={"guard": {"limit": 5, "margin": 5, "five_hour_max": 92}})
-        self.assertEqual((cfg.claude_limits.hour_max, cfg.claude_limits.five_hour_max), (30, 92))
+        self.assertEqual((cfg.claude_limits.hour_max, cfg.claude_limits.five_hour_max), (None, 92))
 
         cfg = load(overrides={"guard": {"five_hour_max": 101}})
         self.assertEqual(cfg.claude_limits.five_hour_max, 85)
         self.assertTrue(any("keeping default" in w for w in cfg.warnings))
 
         cfg = load(overrides={"judge": {"budget": {"yield_at_hour_usage": 0, "yield_at_five_hour_pct": -1}}})
-        self.assertEqual((cfg.claude_limits.hour_max, cfg.claude_limits.five_hour_max), (30, 85))
+        self.assertEqual((cfg.claude_limits.hour_max, cfg.claude_limits.five_hour_max), (None, 85))
         self.assertTrue(any("keeping default" in w for w in cfg.warnings))
 
         # a partial claude_limits block warns only for keys the user set

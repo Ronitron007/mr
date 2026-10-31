@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- No hourly Claude cap by default: `claude_limits.hour_max` defaults to null (no hourly check in the rung guard,
+  advisor gate or judge yield; a missing hourly reading is not a deny when unset). `five_hour_max: 85`,
+  reservations, probes and the Claude lock are unchanged; setting `hour_max` explicitly still enables the cap.
+
 ## v0.1.0 (2026-10-31)
 
 First public release.

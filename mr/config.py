@@ -93,7 +93,7 @@ class Timeouts:
 
 @dataclass(frozen=True)
 class ClaudeLimits:
-    hour_max: float
+    hour_max: float | None
     five_hour_max: float
 
 
@@ -571,6 +571,8 @@ def _claude_limits_block(raw: dict) -> None:
         raise ConfigError("claude_limits: missing")
     for key in ("hour_max", "five_hour_max"):
         val = block.get(key)
+        if key == "hour_max" and val is None:
+            continue  # null/absent = no hourly cap
         if _plain_number(val) is None or val <= 0:
             raise ConfigError(f"claude_limits.{key}: must be a positive number")
     if block["five_hour_max"] > 100:
@@ -799,7 +801,7 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
             reservation_ttl_s=guard["reservation_ttl_s"],
         ),
         claude_limits=ClaudeLimits(
-            hour_max=raw["claude_limits"]["hour_max"],
+            hour_max=raw["claude_limits"].get("hour_max"),
             five_hour_max=raw["claude_limits"]["five_hour_max"],
         ),
         review=ReviewCfg(

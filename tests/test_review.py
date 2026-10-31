@@ -153,7 +153,7 @@ class TestGrokAuthorReviewer(ReviewCase):
 class TestGuardDenied(ReviewCase):
     def test_review_guard_denied(self):  # S denied -> review.claude_denied (C25), still cross-family
         self.setup({"claude": {SONNET: [{}]}, "cursor": {COMPOSER: [{"result": _valid()}]}})
-        gitfix.write_check(self.dir, {"default": dict(CHECK_DEFAULT, hour_usage=39)})
+        gitfix.write_check(self.dir, {"default": dict(CHECK_DEFAULT, five_hour_pct=84)})
         sig = self.run_review(risk="high")
         self.assertTrue(sig.denied)
         self.assertEqual(sig.reviewer, "C25")
@@ -171,7 +171,7 @@ class TestGuardDenied(ReviewCase):
             }))
         import dataclasses  # config now rejects this; the runtime guard still holds for hand-built configs
         self.cfg = dataclasses.replace(self.cfg, review=dataclasses.replace(self.cfg.review, claude_denied="G-h"))
-        gitfix.write_check(self.dir, {"default": dict(CHECK_DEFAULT, hour_usage=39)})
+        gitfix.write_check(self.dir, {"default": dict(CHECK_DEFAULT, five_hour_pct=84)})
         sig = self.run_review(risk="high")  # grok author, S denied, G-h is grok: no review at all
         self.assertTrue(sig.denied)
         self.assertEqual(sig.verdict, "unclear")

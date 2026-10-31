@@ -169,7 +169,7 @@ class TestCascade(LoopCase):
         self.set_scenario({
             "cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul("*")]},
             "claude": {OPUS: [{}], SONNET: [{"result": REVIEW_PASS}]}},
-            check={"default": dict(CHECK_DEFAULT, hour_usage=39)})
+            check={"default": dict(CHECK_DEFAULT, five_hour_pct=84)})
         code, doc, err = self.run_json("--type", "bugfix", "--difficulty", "hard", "--budget", "low")
         self.assertEqual(self.models()[:2], [GH, GX], err)  # O denied by the guard: planner ran on G-h
         planner = self.records("planner")
@@ -217,7 +217,7 @@ class TestCascade(LoopCase):
         self.set_scenario(
             {"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul("+")]},
              "claude": {SONNET: [{}]}},
-            check={"default": dict(CHECK_DEFAULT, hour_usage=39)})
+            check={"default": dict(CHECK_DEFAULT, five_hour_pct=84)})
         code, doc, err = self.run_json("--type", "bugfix", "--difficulty", "medium", "--rung", "S")
         self.assertEqual(code, 75, err)
         # planner, then the fallback G-x; O is denied too and G-x is used, so the chain is empty; Claude never ran
