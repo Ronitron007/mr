@@ -31,4 +31,4 @@ mr = "mr.__main__:main"
 include = ["mr*"]
 
 [tool.setuptools.package-data]
-mr = ["prompts/*.txt", "*.yaml", "trace/web/*", "trace/deploy/*"]
+mr = ["prompts/*.txt", "*.yaml", "trace/web/*", "trace/deploy/*", "judge/*.txt", "judge/questions/*.json"]

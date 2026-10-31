@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Building blocks for the shadow judge: the 19 routing questions (`route.v1`), a fixed prompt that shows the model
+  only neutral `q01...` keys, a redacted and size-checked task state with no caller options in it, a strict reader
+  for the model's JSON reply (anything but one exact object is rejected; bad single answers become "unsure"), and a
+  reader that turns answers into act, raise, unsure or ignored. These are pure functions: nothing calls them yet, so
+  routing is unchanged.
+
 - Shadow classifier wired into `mr run` and `mr route`. With `--classifier shadow` (or `classifier.mode: shadow`) a
   background thread asks the cheap model beside the rules; its answer is logged and joined at task end (timeout
   `classifier.join_timeout_s`, default 75 s) and never changes routing, rungs, review or exit codes. Confident tasks are
