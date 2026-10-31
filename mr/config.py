@@ -516,6 +516,15 @@ def _judge(raw: dict) -> None:
     haiku = backends.get("haiku") if isinstance(backends, dict) else None
     if not isinstance(haiku, dict) or haiku.get("path") != "max" or haiku.get("model") != "claude-haiku-5-5":
         raise ConfigError("judge.backends.haiku: must be path 'max' and model 'claude-haiku-5-5'")
+    budget = block.get("budget")
+    if isinstance(budget, dict):
+        per_hour = budget.get("calls_per_hour")
+        if per_hour is not None and (_plain_number(per_hour) is None or per_hour <= 0):
+            raise ConfigError("judge.budget.calls_per_hour: must be null or a number > 0")
+        if "shadow_five_hour_max" in budget:
+            cap = _plain_number(budget["shadow_five_hour_max"])
+            if cap is None or not 0 <= cap <= 100:
+                raise ConfigError("judge.budget.shadow_five_hour_max: must be a number from 0 to 100")
 
 
 def _blocks(raw: dict) -> None:

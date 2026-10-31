@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Call path for the shadow judge, still not wired into `mr run`: one guarded Haiku call through the claude wrapper
+  (no lock, no reservation, no probe; it yields when the usage check is high, unreadable or, in shadow, at
+  `judge.budget.shadow_five_hour_max`, default 80), a status mapping that never retries, a call budget (150 a day,
+  6 a task, no hourly cap unless `judge.budget.calls_per_hour` is set; the day rolls at midnight IST), a shared
+  circuit breaker and a seven-day answer cache. The rung guard now counts recent judge calls in its reserve.
+
 - Building blocks for the shadow judge: the 19 routing questions (`route.v1`), a fixed prompt that shows the model
   only neutral `q01...` keys, a redacted and size-checked task state with no caller options in it, a strict reader
   for the model's JSON reply (anything but one exact object is rejected; bad single answers become "unsure"), and a

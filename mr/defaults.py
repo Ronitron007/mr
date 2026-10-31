@@ -88,8 +88,8 @@ judge:
   timeouts_ms: {call: 12000, decision_point: 15000, comparison: 15000}   # judge runs only at task boundaries
   state_limits_tokens: {route: 16000, spec: 16000, postrun: 16000, conformance_diff: 8000}
   token_estimate_bytes_per_token: 3.0
-  budget: {calls_per_hour: 20, calls_per_day: 150, max_calls_per_task: 6,      # §9.10
-           est_pts_per_call: 0.2}
+  budget: {calls_per_hour: null, calls_per_day: 150, max_calls_per_task: 6,    # §9.10; null = no hourly cap
+           est_pts_per_call: 0.2, shadow_five_hour_max: 80}                    # shadow calls stop at this five_hour_pct
   cache: {route_ttl_days: 7, spec_ttl_days: 30, postrun_ttl_days: 30}
   breaker: {consecutive_failures: 3, open_minutes: 15}
 """

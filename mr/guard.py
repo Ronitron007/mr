@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import fcntl
+import importlib
 import json
 import os
+import shutil
 import subprocess
 import time
 import uuid
@@ -183,7 +185,7 @@ def _check(rung: str, cfg, now: float | None) -> GuardResult:
         fiveh = None
         return result(False, "no 5h baseline")
     try:
-        reserved = reserved_total(cfg, now) + 0.0  # + judge_recent: always 0 in v1 (judge deferred)
+        reserved = reserved_total(cfg, now) + _judge_recent(cfg, sample)
     except (OSError, ValueError):
         return result(False, "guard error")
     if lim.hour_max is not None and hour + reserved + est > lim.hour_max:
@@ -191,6 +193,19 @@ def _check(rung: str, cfg, now: float | None) -> GuardResult:
     if fiveh + est > lim.five_hour_max:
         return result(False, "five_hour")
     return result(True, "ok")
+
+
+def _judge_recent(cfg, sample: dict | None) -> float:
+    """Judge calls since the sample was taken, priced at judge.budget.est_pts_per_call."""
+    since = (sample or {}).get("checked_at")
+    if not isinstance(since, str):
+        return 0.0
+    try:
+        budget = importlib.import_module("mr.judge.budget")  # lazy: nothing imports mr.judge at load time
+        calls = budget.calls_since(cfg, since)
+    except ValueError:
+        return 0.0
+    return calls * float(((cfg.judge or {}).get("budget") or {}).get("est_pts_per_call", 0.2))
 
 
 def judge_should_yield(cfg, hour, five_hour_pct) -> bool:
@@ -291,3 +306,64 @@ def run_claude_guarded(rung: str, argv_tail: list[str], cfg, *, task: str, exec_
     finally:
         fcntl.flock(lock.fileno(), fcntl.LOCK_UN)
         lock.close()
+
+
+# --- judge run (§8 judge paragraph, §9.3.1) ---------------------------------
+
+JUDGE_MODEL = "claude-haiku-5-5"
+JUDGE_DENIED_TOOLS = "Bash Edit Write Read Grep Glob WebFetch WebSearch Task NotebookEdit"
+
+
+@dataclass
+class JudgeRunResult:
+    status: str  # ran | guard_yield | timeout | cli_unavailable
+    rc: int | None
+    stdout: str
+    stderr: str
+    wall_s: float
+    timed_out: bool
+    sample: dict | None
+
+
+def _judge_yields(cfg, mode: str) -> tuple[bool, dict | None]:
+    """Read the check once, never probing. An unusable reading yields; an empty check path does not."""
+    if not cfg.paths.check:
+        return False, None
+    sample = run_check(cfg, probe=False)
+    fiveh = (sample or {}).get("five_hour_pct")
+    if sample is None or not _num(fiveh) or sample.get("exceeded") is True:
+        return True, sample
+    hour = sample.get("hour_usage")
+    if not _num(hour):
+        if cfg.claude_limits.hour_max is not None:
+            return True, sample
+        hour = 0
+    if judge_should_yield(cfg, hour, fiveh):
+        return True, sample
+    cap = ((cfg.judge or {}).get("budget") or {}).get("shadow_five_hour_max", 80)
+    return mode == "shadow" and fiveh >= cap, sample
+
+
+def run_claude_judge(prompt: str, cfg, timeout_s: float, *, mode: str, exec_fn=None) -> JudgeRunResult:
+    """The only place the judge argv is built. No claude.lock, no reservation, no probe, no retry."""
+    claude = cfg.paths.claude
+    if not (os.path.isfile(claude) and os.access(claude, os.X_OK)) and shutil.which(claude) is None:
+        return JudgeRunResult("cli_unavailable", None, "", "", 0.0, False, None)
+    yields, sample = _judge_yields(cfg, mode)
+    if yields:
+        return JudgeRunResult("guard_yield", None, "", "", 0.0, False, sample)
+    from mr import runners  # lazy: avoids an import cycle
+    exec_fn = exec_fn or runners.exec_child
+    argv = [claude, "-p", prompt, "--model", JUDGE_MODEL]
+    if ((cfg.judge or {}).get("backends") or {}).get("haiku", {}).get("effort") == "low":
+        argv += ["--effort", "low"]
+    argv += ["--output-format", "json", "--no-session-persistence", "--disallowedTools", JUDGE_DENIED_TOOLS]
+    workdir = os.path.join(cfg.paths.home, "judge-workdir")
+    try:
+        os.makedirs(workdir, exist_ok=True)
+        rc, out, err, wall, timed_out = exec_fn(argv, workdir, runners.child_env(True), timeout_s,
+                                                _state(cfg, os.path.join("judge-raw", "last")))
+    except OSError:
+        return JudgeRunResult("cli_unavailable", None, "", "", 0.0, False, sample)
+    status = "timeout" if timed_out else "guard_yield" if rc == 75 else "ran"
+    return JudgeRunResult(status, rc, out, err, wall, timed_out, sample)
