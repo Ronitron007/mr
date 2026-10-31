@@ -19,7 +19,8 @@ task wastes either money or time. `mr` makes the choice per task:
    either retries with more effort, moves up the ladder, or stops and asks a human. Hard caps limit attempts and
    expensive rungs per task.
 
-Every step is logged to a local JSONL file, and `mr trace` shows each task as a climb up the price ladder.
+Every step is logged to a local JSONL file, and `mr trace` shows each task as a climb up the price ladder (see
+[See every run](#see-every-run-mr-trace)).
 
 ## Prerequisites
 
@@ -60,6 +61,74 @@ mr trace serve                        # open the printed local address to see th
 Useful `mr run` flags: `--type` (code, bugfix, refactor, test, ui, docs, ...), `--difficulty` (trivial ... critical),
 `--route cascade`, `--budget free|low|normal|high`, `--dry-run`, `--repo PATH`, `--yes` (skip the confirmation),
 `-f FILE` (read the task from a file).
+
+## See every run: `mr trace`
+
+mr writes every route, plan, attempt, review and guard decision to its local log. `mr trace` turns that log into
+pictures, so you can see at a glance which models a task climbed through, where it failed and why, where the time
+went, and how it ended, without reading JSONL.
+
+![An escalated task in mr trace: planned on G-h, the S+A attempt failed review, G-x took over and was accepted](docs/img/trace-escalated.png)
+
+**The climb (ladder chart).** A task is a climb up a price ladder until something passes the checks, so each task
+is drawn as one chart: time runs left to right, and rungs run from cheap at the bottom to strong and expensive at
+the top. Each bar is one step (plan, implement, review) on the rung that ran it; red bars failed, and the failure
+class is written next to them (`tried_wrong`, `spec_suspect`, `off_track`, ...) with a plain-English line under the
+chart. A strip along the bottom splits the wall time into "a model was working" and "mr's own checks, tests, git".
+
+**The task page** opens with the outcome headline (accepted on which rung after how many escalations, needs a
+human and why, exhausted, interrupted), then the route, type, difficulty, risk, wall time, cost and tokens, and the
+ladder with the rung that won highlighted. Below the chart, **step by step** cards show each step's model, time,
+tokens, cost, diff size, the H/D/A/C check signals, what the model said it did (done, pushback, blocked), and its
+tool calls in order (for cursor rungs, read from the cursor-agent transcripts under `~/.cursor/projects`, or
+`MRTRACE_CURSOR_PROJECTS`).
+
+**The all-jobs board** on the left has a summary strip (jobs, accepted, escalated, needing a human, running,
+median time, total cost units), model sessions per rung, failures by class and how many jobs were accepted on the
+first rung versus after escalating. Below it every job is listed with its own mini climb. Filter by Running,
+Climbed or Not accepted and by repo, search with `/`, and move with `j`/`k`. A job's id in the URL
+(`#t-2919b3e9`) opens it directly.
+
+![A task that needs a human: the cheap rung pushed back that the spec looked wrong, the plan was redone, and it stopped after off_track and spec_suspect](docs/img/trace-needs-human.png)
+
+### Trace commands
+
+| Command | What you get |
+|---|---|
+| `mr trace serve [--port 8765] [--host 127.0.0.1]` | A live local page at `http://127.0.0.1:8765/`. It re-reads mr's records while you watch (the page polls every 4 s) and shows the step that is running right now. Ctrl-C stops it. |
+| `mr trace build [-o mr-trace.local.html]` | One self-contained HTML file with your real data, to open offline. `*.local.html` is git-ignored; it contains your task titles, so keep it private. |
+| `mr trace show TASK_ID` | The story of one task in the terminal (add the global `--json` for the raw trace). |
+| `mr trace demo [-o docs/index.html] [--data docs/demo-traces.json]` | A scrubbed snapshot that is safe to publish, plus the scrubbed data as JSON. |
+
+All of them read mr's data dir (`MR_HOME`, else `paths.home` from your config, else the default data dir); pass
+`mr trace --home PATH <command>` to point at another one. The viewer only reads; it never changes mr's records.
+
+```text
+$ mr trace show t-2919b3e9
+t-2919b3e9  Code task, hard, 2 attempts (demo)
+Accepted on G-x (grok-4.7-xhigh) after 1 escalation · 15m 20s · 2.78 units
+  1. Plan on G-h (grok-4.7-high) · 6m 01s · ok
+  2. Implement on S+A (claude-sonnet-5-5,claude-opus-5-5) · 1m 00s · failed: tried_wrong · +47 -0 in 1 file
+  3. Review on G-x (grok-4.7-xhigh) · 5m 15s · failed
+  4. Implement on G-x (grok-4.7-xhigh) · 2m 47s · ok · escalated from S+A · +42 -0 in 1 file
+  5. Review on K-h (kimi-k3-high) · 13s · ok
+```
+
+### What `mr trace demo` scrubs
+
+Real task text never goes into a demo. `demo`:
+- replaces every title with a synthetic one built only from routing facts (for example "Code task, medium,
+  2 attempts (demo)") and drops the "why it stopped" text;
+- renames repos to `private-repo-1`, `private-repo-2`, ... (only `scratch-repo`, plus any names you list in
+  `MR_TRACE_PUBLIC_REPOS`, keep their names) and renames non-task labels to `review-N`;
+- drops prompts, model summaries, pushback text, requirements, patch and raw-output paths, session ids, commits,
+  working dirs and the caller, and keeps only the name and kind of each tool call (no arguments);
+- turns any remaining string that looks like a path into `[path]` and anything that looks like a key or token
+  into `[redacted]`;
+- refuses to write anything (exit 1) if a real title or label of 12 or more characters, or a secret-looking string,
+  still survives.
+
+The screenshots above come from scrubbed demo data.
 
 ## Commands
 
