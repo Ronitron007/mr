@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Classifier client for the shadow classifier: a fixed prompt template, a strict reader for the cheap model's JSON
+  answer (one repair retry), a seven-day answer cache and a log record. It runs the model with no file access from an
+  empty work folder and never with a Claude model. Nothing calls it yet, so routing is unchanged.
+
 - Logging seam for the shadow judge and classifier: new redaction helper (secrets, tokens, emails and phone-like
   numbers become `<redacted:...>` markers), route records can carry shadow answers, and the task record now has
   `text_redacted` (redacted task text, first 4000 characters), `feature_hash` and the shadow summaries. No model
