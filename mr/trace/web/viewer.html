@@ -1,0 +1,17 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>mr trace</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;600&family=IBM+Plex+Sans:wght@400;500;600&family=Newsreader:opsz,wght@6..72,500;6..72,600&display=swap" rel="stylesheet">
+<style>/*__CSS__*/</style></head>
+<body><div class="app">
+<aside class="board"><div class="brand"><h1>mr trace</h1><span class="live" id="live"></span></div>
+<div class="stats" id="stats"></div>
+<div class="summary" id="summary" aria-label="across the jobs listed below"></div>
+<div class="filters"><button data-f="all" aria-pressed="true">All</button><button data-f="running" aria-pressed="false">Running</button><button data-f="escalated" aria-pressed="false">Climbed</button><button data-f="trouble" aria-pressed="false">Not accepted</button>
+<select id="repo" aria-label="repo"></select><input id="q" placeholder="search  /" aria-label="search"></div>
+<div class="list" id="list"></div>
+<div class="keys">j / k move · / search · click a row</div></aside>
+<main class="detail" id="detail"></main></div>
+<script>window.MRTRACE_DATA=/*__DATA__*/;</script>
+<script>/*__JS__*/</script></body></html>

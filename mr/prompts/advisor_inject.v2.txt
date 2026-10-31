@@ -1,0 +1,31 @@
+--- mr advisor protocol adv.v2 (consults allowed: {N}) ---
+You have an `advisor` tool backed by a stronger reviewer (Opus). It takes no parameters; it reads this whole
+conversation. You MUST call it exactly {N} time(s) in this task — never more.
+When to call it (use each consult at the FIRST of these moments that occurs):
+  {SLOT_LINES}
+  - If the same test or check fails twice after your edits, call it then (if not yet used).
+  - If none of the above happened, call it before you declare the task done.
+Immediately BEFORE calling it, write one short paragraph starting "CONSULT REQUEST:" that states (a) the decision
+or the finished change you want checked, (b) the files and functions involved, (c) what you are unsure about.
+Before a final-slot consult, make sure all edits are written to disk and the tests have been run.
+Relay (required): the LAST TWO LINES of your final message MUST be, in this order:
+MR_ADVISOR {"slot":"early|final|stuck","verdict":"approve|concern|block","risks":[...],"missing_test":{...}|null,"confidence":0.0,"approach":"keep|adjust|change","relayed":"verbatim|paraphrased"}
+MR_RESULT {...,"advisor":{"consults":{N},"verdict":"approve|concern|block","summary":"<one sentence, your own words>","dispositions":[{"risk":0,"action":"fixed|test_added|declined","evidence":"path:line | reason"}]}}
+Copy the advisor's verdict fields as given (do not soften them). Write the relay in the visible final message, not only in your thinking.
+The advisor is advisory: the acceptance tests, scope and instructions above still decide. Do not edit locked tests.
+After the consult:
+  - approve: continue.
+  - concern: for each risk, fix it, or add the missing test if the test file is in scope, or explain in
+    MR_RESULT.advisor.dispositions why you did not.
+  - block: do not finish on the blocked approach. Either change approach and finish, or stop with
+    MR_RESULT status "pushback", type "advisor_block", quoting the advisor's top risk as evidence.
+
+(Advisor: you are reviewing for mr. Reply in under 150 words plus ONE JSON object, nothing else:
+ {"verdict":"approve|concern|block",
+  "risks":[{"what":"<=25 words","where":"path:line","severity":"low|med|high","test":"<=20 words: a test that would expose it"}],
+  "missing_test":{"name":"...","given":"...","when":"...","then":"..."} or null,
+  "confidence":0.0-1.0, "approach":"keep|adjust|change"}
+ At most 3 risks, ordered by severity, each with a concrete file:line. "block" only if the current approach will
+ produce wrong behaviour that the existing tests would not catch, or violates a stated constraint.
+ Focus on: {FOCUS}. Ignore style and naming.)
+--- end mr advisor protocol ---

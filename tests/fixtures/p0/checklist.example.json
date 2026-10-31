@@ -1,0 +1,107 @@
+{
+  "goal": "Add pure helpers to mute and unmute a chat thread's notifications, exported from the chat feature.",
+  "scope": {
+    "modify": [
+      "src/features/chat/index.ts"
+    ],
+    "create": [
+      "src/features/chat/muteSettings.ts",
+      "src/features/chat/__tests__/muteSettings.mr.spec.ts"
+    ],
+    "forbidden": [
+      "supabase/migrations/**",
+      "package.json",
+      "package-lock.json",
+      "ios/**",
+      "app.config.ts",
+      "vitest.config.*"
+    ]
+  },
+  "requirements": [
+    {
+      "id": "R1",
+      "text": "toggleMute(settings, chatId) SHALL return a new MuteSettings with chatId appended to mutedChatIds when chatId is not muted, and SHALL NOT mutate the input.",
+      "examples": [
+        {
+          "given": "settings {mutedChatIds:['a']}",
+          "when": "toggleMute(settings, 'b')",
+          "then": "result.mutedChatIds is ['a','b'] and settings.mutedChatIds is still ['a']"
+        }
+      ]
+    },
+    {
+      "id": "R2",
+      "text": "toggleMute(settings, chatId) SHALL remove chatId from mutedChatIds when chatId is muted, keeping the order of the other ids.",
+      "examples": [
+        {
+          "given": "settings {mutedChatIds:['a','b','c']}",
+          "when": "toggleMute(settings, 'b')",
+          "then": "result.mutedChatIds is ['a','c']"
+        }
+      ]
+    },
+    {
+      "id": "R3",
+      "text": "isMuted(settings, chatId) SHALL return true if and only if chatId is in settings.mutedChatIds.",
+      "examples": [
+        {
+          "given": "settings {mutedChatIds:['a']}",
+          "when": "isMuted(settings, 'a') and isMuted(settings, 'b')",
+          "then": "true and false"
+        }
+      ]
+    }
+  ],
+  "acceptance": [
+    {
+      "id": "A1",
+      "covers": [
+        "R1"
+      ],
+      "file": "src/features/chat/__tests__/muteSettings.mr.spec.ts",
+      "tests": [
+        "mutes an unmuted chat",
+        "does not mutate the input settings"
+      ]
+    },
+    {
+      "id": "A2",
+      "covers": [
+        "R2"
+      ],
+      "file": "src/features/chat/__tests__/muteSettings.mr.spec.ts",
+      "tests": [
+        "unmutes a muted chat and keeps the order of the others"
+      ]
+    },
+    {
+      "id": "A3",
+      "covers": [
+        "R3"
+      ],
+      "file": "src/features/chat/__tests__/muteSettings.mr.spec.ts",
+      "tests": [
+        "isMuted reports membership"
+      ]
+    }
+  ],
+  "est_loc": 30,
+  "files_map": {
+    "R1": [
+      "src/features/chat/muteSettings.ts"
+    ],
+    "R2": [
+      "src/features/chat/muteSettings.ts"
+    ],
+    "R3": [
+      "src/features/chat/muteSettings.ts",
+      "src/features/chat/index.ts"
+    ]
+  },
+  "tests": [
+    {
+      "path": "src/features/chat/__tests__/muteSettings.mr.spec.ts",
+      "content": "import { describe, expect, it } from 'vitest';\nimport { isMuted, toggleMute, type MuteSettings } from '../muteSettings';\n\ndescribe('muteSettings', () => {\n  it('mutes an unmuted chat', () => {\n    const next = toggleMute({ mutedChatIds: ['a'] }, 'b');\n    expect(next.mutedChatIds).toEqual(['a', 'b']);\n  });\n\n  it('does not mutate the input settings', () => {\n    const input: MuteSettings = { mutedChatIds: ['a'] };\n    const next = toggleMute(input, 'b');\n    expect(input.mutedChatIds).toEqual(['a']);\n    expect(next).not.toBe(input);\n  });\n\n  it('unmutes a muted chat and keeps the order of the others', () => {\n    const next = toggleMute({ mutedChatIds: ['a', 'b', 'c'] }, 'b');\n    expect(next.mutedChatIds).toEqual(['a', 'c']);\n  });\n\n  it('isMuted reports membership', () => {\n    const settings: MuteSettings = { mutedChatIds: ['a'] };\n    expect(isMuted(settings, 'a')).toBe(true);\n    expect(isMuted(settings, 'b')).toBe(false);\n  });\n});\n"
+    }
+  ]
+}

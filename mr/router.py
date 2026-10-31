@@ -1,0 +1,230 @@
+"""Rules-only router (mr-spec §5.3, §9.2). Judge and classifier are ignored in v1."""
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+from mr.config import Config, _match
+from mr.prepass import Features
+from mr.task import Task
+
+_DIFF = ("trivial", "easy", "medium", "hard", "critical")
+_RISK = ("low", "medium", "high")
+_REVIEW_AT = frozenset({"code", "bugfix", "ios-native", "ui"})
+_OPUS = frozenset({"O", "O+"})
+_KIMI_DROP = frozenset({"K-h", "K-x"})
+
+
+class InvariantError(Exception):
+    """A §9.2 invariant failed. v1 has no judge to drop, so this propagates."""
+
+
+class RouteError(Exception):
+    """Usage problem in routing. Callers map this to exit 2."""
+
+
+@dataclass(frozen=True)
+class Decision:
+    route: str
+    type: str
+    difficulty: str
+    risk: str
+    risk_tags: frozenset[str]
+    load_bearing: bool
+    high_judgment: bool
+    needs_review: bool
+    isolate_hint: str | None
+    needs_clarification: bool
+    ladder: tuple[str, ...]
+    reasons: tuple[str, ...]
+    sources: dict[str, str]
+
+
+def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None) -> Decision:
+    """Merge params and prepass rules. ``judge`` and ``clf`` are accepted and ignored."""
+    del judge, clf
+    reasons: list[str] = []
+    kind, type_src = _resolve_type(task, f)
+    difficulty, diff_src = _resolve_difficulty(task, f, reasons)
+    cell_design = cfg.ladders[kind][difficulty] == "design_route"
+    triggered = cell_design or _design_trigger(f, difficulty, cfg)
+    if f.judgment_keywords:
+        reasons.append("judgment_keywords_logged_only")
+    if task.params.route:
+        route, route_src = task.params.route, "param"
+        if triggered and task.params.route != "design":
+            reasons.append("param_overrode_trigger")
+    elif triggered:
+        route, route_src = "design", "rule"
+    else:
+        route, route_src = "cascade", "default"
+    ladder, ladder_src = _select_ladder(route, kind, difficulty, cfg, reasons)
+    ladder = _apply_prefer(ladder, task.params.prefer)
+    before = ladder
+    ladder = _apply_budget(ladder, cfg, task.params.budget, reasons)
+    if route != "design" and before and not ladder:
+        reasons.append("empty_ladder_after_budget")
+    rank = _DIFF.index(difficulty)
+    needs_review = (
+        (kind in _REVIEW_AT and rank >= _DIFF.index("medium"))
+        or kind == "refactor"
+        or bool(cfg.review_required.get(f"{kind}_{difficulty}", False))
+    )
+    decision = Decision(
+        route=route,
+        type=kind,
+        difficulty=difficulty,
+        risk=f.risk_floor,
+        risk_tags=f.risk_tags,
+        load_bearing=bool(f.public_interface or f.new_module),
+        high_judgment=bool(f.judgment_keywords),
+        needs_review=needs_review,
+        isolate_hint=None,
+        needs_clarification=f.ambiguity >= 3,
+        ladder=ladder,
+        reasons=tuple(reasons),
+        sources={
+            "route": route_src,
+            "type": type_src,
+            "difficulty": diff_src,
+            "risk": "rule",
+            "ladder": ladder_src,
+        },
+    )
+    check_invariants(decision, f, task, cfg)
+    return decision
+
+
+def check_invariants(d: Decision, f: Features, task: Task, cfg: Config) -> None:
+    """I1–I3. I4–I6 are judge-only and are not checked in v1."""
+    if _RISK.index(d.risk) < _RISK.index(f.risk_floor) or not set(f.risk_tags) <= set(d.risk_tags):
+        raise InvariantError("I1")
+    floor = f.difficulty_floor
+    if _DIFF.index(d.difficulty) < _DIFF.index(floor):
+        raise InvariantError("I2")
+    given = task.params.difficulty
+    if given is not None and _DIFF.index(given) >= _DIFF.index(floor) and d.difficulty != given:
+        raise InvariantError("I2")
+    mode = _budget_mode(task.params.budget)
+    for code in d.ladder:
+        rung = cfg.rungs.get(code)
+        if rung is None or not _allowed(cfg, rung) or not _keeps(cfg, code, mode):
+            raise InvariantError("I3")
+
+
+def route_record(task: Task, f: Features, d: Decision) -> dict:
+    """§7.4 route record. v1 does not append it."""
+    rules = {
+        "route": d.route,
+        "type": d.type,
+        "difficulty": d.difficulty,
+        "risk": d.risk,
+        "risk_tags": sorted(d.risk_tags),
+    }
+    applied = dict(rules)
+    applied["ladder"] = list(d.ladder)
+    return {
+        "role": "route",
+        "task": task.id,
+        "fingerprint": task.fingerprint,
+        "prepass_confident": f.confident,
+        "rules": rules,
+        "judge": None,
+        "classifier": None,
+        "applied": applied,
+        "sources": dict(d.sources),
+        "invariant_violation": False,
+    }
+
+
+def _resolve_type(task: Task, f: Features) -> tuple[str, str]:
+    if task.params.type:
+        return task.params.type, "param"
+    if f.type == "code" and not any(f.type_hits.values()):
+        return "code", "default"
+    return f.type, "rule"
+
+
+def _resolve_difficulty(task: Task, f: Features, reasons: list[str]) -> tuple[str, str]:
+    floor = f.difficulty_floor
+    given = task.params.difficulty
+    if given is not None:
+        if _DIFF.index(given) < _DIFF.index(floor):
+            reasons.append("param_raised_by_rule")
+            return floor, "rule"
+        return given, "param"
+    est = f.difficulty_est
+    chosen = est if _DIFF.index(est) >= _DIFF.index(floor) else floor
+    return chosen, "rule"
+
+
+def _design_trigger(f: Features, difficulty: str, cfg: Config) -> bool:
+    spec = (cfg.design_route or {}).get("triggers") or {}
+    tags = spec.get("risk_tags") or ()
+    if set(f.risk_tags) & set(tags):
+        return True
+    minimum = spec.get("cross_layer_min")
+    if isinstance(minimum, int) and not isinstance(minimum, bool) and f.cross_layer >= minimum:
+        return True
+    return bool(spec.get("hard_and_ambiguous") and difficulty == "hard" and f.ambiguity >= 2)
+
+
+def _select_ladder(route, kind, difficulty, cfg, reasons):
+    if route == "design":
+        return (), "rule"
+    if route == "judgment":
+        key = "critical" if difficulty == "critical" else "implement"
+        return tuple(cfg.judgment_route[key]), "rule"
+    cell = cfg.ladders[kind][difficulty]
+    if cell != "design_route":
+        return tuple(cell), "default"
+    for lower_name in reversed(_DIFF[: _DIFF.index(difficulty)]):
+        lower = cfg.ladders[kind][lower_name]
+        if lower != "design_route":
+            reasons.append(f"design_cell_forced_cascade:{difficulty}")
+            return tuple(lower), "rule"
+    reasons.append(f"design_cell_forced_cascade:{difficulty}")
+    return (), "rule"
+
+
+def _apply_prefer(ladder: tuple[str, ...], prefer: str | None) -> tuple[str, ...]:
+    if not prefer:
+        return ladder
+    if prefer.startswith("cursor:"):  # hard rule §0.3: no cursor-path models via --prefer
+        raise RouteError("Anthropic models run only via the claude CLI (hard rule)")
+    return (prefer,) + tuple(code for code in ladder if code != prefer)
+
+
+def _apply_budget(ladder, cfg, budget, reasons) -> tuple[str, ...]:
+    if budget == "high":
+        reasons.append("budget_high_not_built")
+        return ladder
+    mode = _budget_mode(budget)
+    if mode == "normal":
+        return ladder
+    return tuple(code for code in ladder if _keeps(cfg, code, mode))
+
+
+def _budget_mode(budget: str | None) -> str:
+    if budget in (None, "normal", "high"):
+        return "normal"
+    return budget
+
+
+def _keeps(cfg: Config, code: str, budget: str) -> bool:
+    rung = cfg.rungs.get(code)
+    if rung is None or budget == "normal":
+        return True
+    if budget == "low":
+        return code not in _OPUS
+    if budget == "free":
+        return rung.path != "max" and code not in _KIMI_DROP
+    return True
+
+
+def _allowed(cfg: Config, rung) -> bool:
+    patterns: list[str] = []
+    for entry in cfg.allowed:
+        if not isinstance(entry, str) or entry.startswith("judge:"):
+            continue
+        patterns.append(entry if entry.startswith(("cursor:", "max:")) else "cursor:" + entry)
+    return _match(f"{rung.path}:{rung.model}", patterns)

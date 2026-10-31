@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mr-router"
+version = "0.1.0"
+description = "Model router for coding tasks: sends each task to the cheapest capable AI coding model, verifies with tests and a reviewer, and escalates on failure."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Rohan Malik" }]
+requires-python = ">=3.13"
+dependencies = ["PyYAML>=6"]
+keywords = ["llm", "coding-agent", "model-routing", "cli", "claude", "cursor"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: POSIX",
+    "Environment :: Console",
+    "Topic :: Software Development",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ronitron007/mr"
+
+[project.scripts]
+mr = "mr.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["mr*"]
+
+[tool.setuptools.package-data]
+mr = ["prompts/*.txt", "*.yaml", "trace/web/*", "trace/deploy/*"]

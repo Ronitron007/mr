@@ -1,0 +1,302 @@
+[
+  {
+    "id": "V01",
+    "inputs": {"mode": "off", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "critical", "risk": "high", "ambiguity": "low", "load_bearing": true, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N0", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N0: advisor.mode == off beats everything, even a critical Y1-shaped task."
+  },
+  {
+    "id": "V02",
+    "inputs": {"mode": "on", "flag": "off", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N0", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N0: explicit --advisor off on an otherwise-Y2 task."
+  },
+  {
+    "id": "V03",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "free", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["ordering"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N0", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N0: --budget free on an otherwise-Y3 task."
+  },
+  {
+    "id": "V04",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "low", "rung": "S+", "route": "cascade", "item_kind": null, "type": "bugfix", "difficulty": "critical", "risk": "high", "ambiguity": "low", "load_bearing": true, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N0", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N0: --budget low beats a Y1-shaped critical task."
+  },
+  {
+    "id": "V05",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "high", "ambiguity": "low", "load_bearing": true, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N1", "consult": false, "slots": [], "gate": "ok", "run_rung": "S"},
+    "note": "N1: S (medium effort) is not Max-path S+."
+  },
+  {
+    "id": "V06",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "O", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "critical", "risk": "high", "ambiguity": "low", "load_bearing": true, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N1", "consult": false, "slots": [], "gate": "ok", "run_rung": "O"},
+    "note": "N1: O is already Opus; advisor adds nothing."
+  },
+  {
+    "id": "V07",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "O+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N1", "consult": false, "slots": [], "gate": "ok", "run_rung": "O+"},
+    "note": "N1: O+ is already Opus."
+  },
+  {
+    "id": "V08",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "G-h", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": ["state-machine"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N1", "consult": false, "slots": [], "gate": "ok", "run_rung": "G-h"},
+    "note": "N1: Grok rungs are not eligible."
+  },
+  {
+    "id": "V09",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "G-x", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N1", "consult": false, "slots": [], "gate": "ok", "run_rung": "G-x"},
+    "note": "N1: Kimi rungs are not eligible."
+  },
+  {
+    "id": "V10",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "C25", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N1", "consult": false, "slots": [], "gate": "ok", "run_rung": "C25"},
+    "note": "N1: Composer rungs are not eligible."
+  },
+  {
+    "id": "V11",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "design", "item_kind": "logic", "type": "code", "difficulty": "critical", "risk": "high", "ambiguity": "low", "load_bearing": true, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N2", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N2: design-route spec item, Opus already planned it; beats Y1."
+  },
+  {
+    "id": "V12",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": "mechanical", "type": "code", "difficulty": "hard", "risk": "high", "ambiguity": "low", "load_bearing": true, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N3", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N3: mechanical item; design route overridden to cascade so N2 does not apply, but N3 still does (D-A2)."
+  },
+  {
+    "id": "V13",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "docs", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N3", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N3: type docs is in {docs, explain, test, review}; beats Y2."
+  },
+  {
+    "id": "V14",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "judgment", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "high", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N4", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N4: judgment route, no sf_tag, not load-bearing (taste work). N4 precedes Y4, so high ambiguity does not trigger."
+  },
+  {
+    "id": "V15",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "bugfix", "difficulty": "trivial", "risk": "high", "ambiguity": "low", "load_bearing": false, "sf_tags": ["state-machine"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N5", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N5: trivial difficulty never consults, even with sf_tags and high risk."
+  },
+  {
+    "id": "V16",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "bugfix", "difficulty": "easy", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["state-machine", "ordering", "event-stream", "agent-flow"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N5", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "30 Oct trial worked example: bugfix, 4 sf_tags, easy -> N5, no consult; matches the trial outcome (zero value)."
+  },
+  {
+    "id": "V17",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "medium", "risk": "low", "ambiguity": "low", "load_bearing": false, "sf_tags": ["ordering"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N6", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N6: routine medium, no tried_wrong in hist, risk != high; sf_tags alone do not rescue medium work."
+  },
+  {
+    "id": "V18",
+    "inputs": {"mode": "on", "flag": "force", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "F1", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "F1: --advisor force on S+ converts an N7-shaped task into a consult; default slot early."
+  },
+  {
+    "id": "V19",
+    "inputs": {"mode": "on", "flag": "force", "consults_flag": 1, "slot_flag": "final", "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "F1", "consult": true, "slots": ["final"], "gate": "ok", "run_rung": "S+A"},
+    "note": "F1: slot taken from --advisor-slot final."
+  },
+  {
+    "id": "V20",
+    "inputs": {"mode": "shadow", "flag": "force", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "F1", "consult": false, "slots": [], "gate": "mode", "run_rung": "S+"},
+    "note": "F1 then G7: force does not bypass gates; shadow mode blocks the consult, plain S+ runs."
+  },
+  {
+    "id": "V21",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "high", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "critical", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y1", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y1: critical with sf_tags. budget high is not an N0 condition (D-A9)."
+  },
+  {
+    "id": "V22",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 2, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "critical", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["state-machine", "agent-flow"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y1", "consult": true, "slots": ["early", "final"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y1 with explicit --advisor-consults 2 adds the final slot (G2)."
+  },
+  {
+    "id": "V23",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "critical", "risk": "high", "ambiguity": "low", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y1", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y1: critical with risk high and no sf_tags still triggers (the or-branch)."
+  },
+  {
+    "id": "V24",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": "logic", "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y2: hard + load_bearing; design route skipped by --route cascade so N2 does not apply (the spec's own example)."
+  },
+  {
+    "id": "V25",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["ordering", "idempotency"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y3", "consult": true, "slots": ["final"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y3: hard with sf_tags, not load-bearing -> final slot (check the finished diff)."
+  },
+  {
+    "id": "V26",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "high", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y4", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y4: hard + ambiguity high + route != design."
+  },
+  {
+    "id": "V27",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "bugfix", "difficulty": "medium", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": [], "hist": [{"model": "grok-4.7-high", "cls": "tried_wrong", "failing": ["A1"]}], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y5", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y5: medium, exactly one tried_wrong by another model, risk >= medium. N6 does not apply because hist has tried_wrong."
+  },
+  {
+    "id": "V28",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "bugfix", "difficulty": "medium", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": [], "hist": [{"model": "grok-4.7-high", "cls": "tried_wrong", "failing": ["A1"]}, {"model": "kimi-k3", "cls": "tried_wrong", "failing": ["A1"]}], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N7", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "Two different models failing the same check A1 is spec_suspect, which goes to the spec author instead - NOT Y5. Falls through to N7 (D-A6)."
+  },
+  {
+    "id": "V29",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N7", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "N7: the spec's example - hard with no sf_tag, not load-bearing, not ambiguous."
+  },
+  {
+    "id": "V30",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 18, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 150000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "V30: G1 boundary allow changed from hour 23 to 18 (18 + 0 + 12 = 30 <= 30, no margin). Also early est exactly 150000 is within the cap."
+  },
+  {
+    "id": "V31",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 19, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "budget", "run_rung": "S+"},
+    "note": "V31: G1 deny changed from hour 24 to 19 (19 + 0 + 12 = 31 > 30). Plain S+ fits (19 + 0 + 6 = 25 <= 30), so run_rung S+."
+  },
+  {
+    "id": "V32",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 73}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "V32: G1 boundary allow changed from five_hour 80 to 73 (73 + 12 = 85 <= 85, no margin)."
+  },
+  {
+    "id": "V33",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 74}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "budget", "run_rung": "S+"},
+    "note": "V33: G1 deny changed from five_hour 81 to 74 (74 + 12 = 86 > 85). Plain S+ still fits (74 + 6 = 80 <= 85), so run_rung S+."
+  },
+  {
+    "id": "V34",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 30, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "budget", "run_rung": null},
+    "note": "V34: G1 deny and plain S+ does not fit either (30 + 0 + 6 = 36 > 30; the +5 margin is gone) -> run_rung null, normal Claude-denied fallback."
+  },
+  {
+    "id": "V35",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": true},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "task_cap", "run_rung": "S+"},
+    "note": "G3: one S+A rung already used in this task; later Sonnet rungs get no consult."
+  },
+  {
+    "id": "V36",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 3, "adv_day": 5, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "hourly_cap", "run_rung": "S+"},
+    "note": "G4: adv_hour == 3 means this run would be the 4th advisor run within the hour, which AC-ADV-3 refuses."
+  },
+  {
+    "id": "V37",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 1, "adv_day": 10, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "hourly_cap", "run_rung": "S+"},
+    "note": "G4: adv_day == 10 hits the per-IST-day cap of 10."
+  },
+  {
+    "id": "V38",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["ordering"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 140000, "final": 150000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y3", "consult": true, "slots": ["final"], "gate": "ok", "run_rung": "S+A"},
+    "note": "G5 boundary: final est exactly 150000 is allowed (cap is 150k, 30 Oct raise)."
+  },
+  {
+    "id": "V39",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["ordering"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 140000, "final": 150001}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y3", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "G5 slot switch: primary slot final is 150001 > 150000 but early fits, so the consult switches to early (transcript is shorter earlier)."
+  },
+  {
+    "id": "V40",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["ordering"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 150001, "final": 160000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y3", "consult": false, "slots": [], "gate": "transcript", "run_rung": "S+"},
+    "note": "G5: both slots over the 150k cap -> no consult, plain S+, O kept as the later rung."
+  },
+  {
+    "id": "V41",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": false, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "unsupported", "run_rung": "S+"},
+    "note": "G6: DISABLE_TELEMETRY or CLAUDE_CODE_DISABLE_ADVISOR_TOOL set (env_ok false) -> unsupported."
+  },
+  {
+    "id": "V42",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": true, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "mode", "run_rung": "S+"},
+    "note": "G7: state/advisor-demoted.json present (demoted true) -> shadow behaviour, plain S+."
+  },
+  {
+    "id": "V43",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": true, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "mode", "run_rung": "S+"},
+    "note": "G7: advisor_breaker open (24 h after a launch error or over_cap) -> no advisor runs box-wide."
+  },
+  {
+    "id": "V44",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "high", "load_bearing": false, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": ["Y4"], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y4", "consult": false, "slots": [], "gate": "mode", "run_rung": "S+"},
+    "note": "G7: row Y4 is in advisor.rows_off, so a Y4-shaped task runs plain S+."
+  },
+  {
+    "id": "V45",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "bugfix", "difficulty": "easy", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["ordering"], "hist": [], "guard": {"hour": 38, "reserved": 0, "five_hour_pct": 90}, "adv_hour": 9, "adv_day": 25, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": false, "demoted": true, "breaker": true, "sa_used_in_task": true},
+    "expect": {"row": "N5", "consult": false, "slots": [], "gate": "ok", "run_rung": "S+"},
+    "note": "Table says no (N5), so gates are never evaluated: every gate input here would fail, yet gate is ok."
+  },
+  {
+    "id": "V46",
+    "inputs": {"mode": "on", "flag": "force", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "N1", "consult": false, "slots": [], "gate": "ok", "run_rung": "S"},
+    "note": "First match wins: N1 precedes F1, so --advisor force on a non-S+ rung still yields no consult (D-A1)."
+  },
+  {
+    "id": "V47",
+    "inputs": {"mode": "trial", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "trial mode (inside mr eval advisor-trial) behaves like on for the table and passes G7 (D-A3)."
+  },
+  {
+    "id": "V48",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 2, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "G2: --advisor-consults 2 has no effect on non-Y1 rows; Y2 keeps its single early slot."
+  },
+  {
+    "id": "V49",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 1, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "hard", "risk": "medium", "ambiguity": "low", "load_bearing": true, "sf_tags": [], "hist": [], "guard": {"hour": 24, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 5, "adv_day": 5, "est_consult_tokens": {"early": 45000, "final": 70000}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y2", "consult": false, "slots": [], "gate": "budget", "run_rung": "S+"},
+    "note": "V49: gate order unchanged at hour 24. Both G1 (24+0+12=36 > 30) and G4 (adv_hour 5) fail; the first failing gate wins -> budget, not hourly_cap."
+  },
+  {
+    "id": "V50",
+    "inputs": {"mode": "on", "flag": "auto", "consults_flag": 2, "slot_flag": null, "budget": "normal", "rung": "S+", "route": "cascade", "item_kind": null, "type": "code", "difficulty": "critical", "risk": "medium", "ambiguity": "low", "load_bearing": false, "sf_tags": ["money"], "hist": [], "guard": {"hour": 10, "reserved": 0, "five_hour_pct": 30}, "adv_hour": 0, "adv_day": 0, "est_consult_tokens": {"early": 45000, "final": 150001}, "rows_off": [], "env_ok": true, "demoted": false, "breaker": false, "sa_used_in_task": false},
+    "expect": {"row": "Y1", "consult": true, "slots": ["early"], "gate": "ok", "run_rung": "S+A"},
+    "note": "Y1 + consults 2, but the final estimate is over the cap while early fits: the final slot is dropped, one early consult remains (D-A5)."
+  }
+]

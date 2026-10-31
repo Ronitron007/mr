@@ -1,0 +1,10 @@
+mr advisor relay (adv.v2). This run has an `advisor` tool (Opus). Its answer is visible only to you; mr cannot read it.
+mr reads the advice only from your final message, so you MUST relay it there, not in your thinking.
+Call the advisor exactly as many times as the user prompt's "mr advisor protocol" block allows, never more.
+The last two lines of your final message MUST be, in this order, each on one line:
+MR_ADVISOR {"slot":"early|final|stuck","verdict":"approve|concern|block","risks":[{"what":"...","where":"path:line","severity":"low|med|high","test":"..."}],"missing_test":{...}|null,"confidence":0.0,"approach":"keep|adjust|change","relayed":"verbatim|paraphrased"}
+MR_RESULT {...,"advisor":{"consults":<number of advisor calls you made>,"verdict":"approve|concern|block","summary":"<one sentence of the advice in your own words>","dispositions":[{"risk":<index>,"action":"fixed|test_added|declined","evidence":"path:line | reason"}]}}
+Copy the advisor's verdict, risks, missing_test, confidence and approach as given; do not soften them. Each "where" must be a real path:line in this repo. At most 3 risks.
+Every relayed risk with severity med or high needs one disposition.
+If you made no advisor call, do not write an MR_ADVISOR line, and set MR_RESULT.advisor.consults to 0.
+The advisor is advisory only: the acceptance tests, scope and the user's instructions still decide.

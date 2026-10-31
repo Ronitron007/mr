@@ -1,0 +1,10 @@
+# Example only: copy to wrangler.toml outside this package and fill in your own names.
+name = "mr-trace-viewer"
+main = "worker.js"
+compatibility_date = "2026-10-01"
+
+[[r2_buckets]]
+binding = "BUCKET"
+bucket_name = "<your-private-bucket>"
+
+# Then: wrangler secret put UPLOAD_TOKEN && wrangler secret put VIEW_TOKEN
