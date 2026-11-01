@@ -321,7 +321,7 @@ class TestStaticHardRules(unittest.TestCase):
         pat = re.compile(r"^\s*(?:import\s+mr\.judge\b|from\s+mr\.judge\b|"
                          r"from\s+mr\s+import\s+[^#\n]*\bjudge\b)", re.M)
         wired = {os.path.join(MR_SRC, "commands", "run.py"), os.path.join(MR_SRC, "commands", "route.py"),
-                 os.path.join(MR_SRC, "cli.py")}
+                 os.path.join(MR_SRC, "cli.py"), os.path.join(MR_SRC, "evaluation.py")}
         for path in _mr_py_files():
             if path in wired or os.path.dirname(path) == os.path.join(MR_SRC, "judge"):
                 continue

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- New `mr eval` command: an offline report on the shadow judge and classifier. It reads the run log (and an optional
+  labels file, by default `eval/labels.jsonl` in the data directory) and writes a Markdown report with the rules,
+  judge, classifier and judge+classifier arms, accuracy, calibration, threshold sweeps (`--sweep`), ops numbers and a
+  PROMOTE / KEEP SHADOW / DEMOTE verdict per field. Flags: `--since YYYY-MM-DD`, `--labels PATH`, `--out PATH`,
+  `--sweep`; with `--json` it prints the same data as one JSON object. It makes no model calls, no network requests and
+  no subprocesses, writes only the report, and never changes config or state: promotion stays a human decision.
 - The shadow judge now runs: `mr run --judge shadow` (or `judge.mode: shadow`) asks Haiku the routing questions in the
   background for unsure tasks and for one in `judge.sample_n` (default 3) confident ones, logs one `judge` record per
   call (answers, readings, budget, cache hit or the reason it was skipped), links it from the route record and adds

@@ -2,15 +2,17 @@
 from __future__ import annotations
 
 import argparse
+import datetime
 import importlib
 import os
+import re
 import sys
 import traceback
 
 from mr import exitcodes as ec
 from mr.config import ConfigError
 
-_DEFERRED = frozenset({"plan", "spec", "judge", "eval", "mark"})
+_DEFERRED = frozenset({"plan", "spec", "judge", "mark"})
 _TYPE = ("code", "bugfix", "refactor", "test", "ios-native", "ui", "review", "plan", "explain", "docs")
 _DIFF = ("trivial", "easy", "medium", "hard", "critical")
 _ROUTE = ("design", "judgment", "cascade")
@@ -103,6 +105,23 @@ def _split_globals(argv: list[str]) -> tuple[str, bool, bool, list[str]]:
     return config, json_out, verbose, rest
 
 
+def _since(value: str) -> str:
+    try:
+        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+            raise ValueError(value)
+        datetime.date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError(f"invalid --since value {value!r}: use YYYY-MM-DD") from None
+    return value
+
+
+def _eval_flags(p) -> None:
+    p.add_argument("--since", type=_since, help="only tasks routed on or after this IST date (YYYY-MM-DD)")
+    p.add_argument("--labels", help="labels JSONL file (default: <home>/eval/labels.jsonl when present)")
+    p.add_argument("--out", help="report path (default: <home>/eval/reports/<IST date>.md)")
+    p.add_argument("--sweep", action="store_true", help="print the threshold sweep table")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = _MrParser(prog="mr", description="Model routing CLI")
     p.add_argument("--config", default=None)
@@ -142,6 +161,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_parser("trace", help="Trace viewer")
     setup = sp.add_parser("setup", help="Configure provider CLIs")
     _setup_flags(setup)
+    _eval_flags(sp.add_parser("eval", help="Offline shadow judge and classifier report"))
     for name in sorted(_DEFERRED):
         sp.add_parser(name, help=f"{name} (deferred in v1)")
     return p
@@ -194,6 +214,8 @@ def _cmd_parser(cmd: str) -> argparse.ArgumentParser:
         show_p.add_argument("task")
     elif cmd == "setup":
         _setup_flags(p)
+    elif cmd == "eval":
+        _eval_flags(p)
     return p
 
 
@@ -221,7 +243,7 @@ def main(argv: list[str] | None) -> int:
     if cmd in _DEFERRED:
         print(f"mr {cmd}: not built in v1 L0", file=sys.stderr)
         return ec.USAGE
-    if cmd not in ("run", "route", "guard", "review", "gc", "unlock", "log", "trace", "setup"):
+    if cmd not in ("run", "route", "guard", "review", "gc", "unlock", "log", "trace", "setup", "eval"):
         print(f"mr: unknown command {cmd!r}", file=sys.stderr)
         return ec.USAGE
     if cmd_argv in (["-h"], ["--help"]):

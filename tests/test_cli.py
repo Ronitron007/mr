@@ -87,7 +87,7 @@ class TestCliFlagMatrix(unittest.TestCase):
             self.assertEqual(code, 2, err)
             self.assertIn("--wait-lock-s", err)
 
-        for cmd in ("plan", "spec", "judge", "eval", "mark"):
+        for cmd in ("plan", "spec", "judge", "mark"):
             code, err = self._run([cmd, "extra", "args"])
             self.assertEqual(code, 2, err)
             self.assertIn(f"mr {cmd}: not built in v1 L0", err)
