@@ -315,12 +315,16 @@ def _mr_py_files():
 
 
 class TestStaticHardRules(unittest.TestCase):
-    """§0.2 (no judge built) and §0.3 (no claude-* model via cursor-agent), checked statically."""
+    """§0.2 (the judge is wired in only at its seams) and §0.3 (no claude-* model via cursor-agent), checked statically."""
 
     def test_no_judge_import(self):
         pat = re.compile(r"^\s*(?:import\s+mr\.judge\b|from\s+mr\.judge\b|"
                          r"from\s+mr\s+import\s+[^#\n]*\bjudge\b)", re.M)
+        wired = {os.path.join(MR_SRC, "commands", "run.py"), os.path.join(MR_SRC, "commands", "route.py"),
+                 os.path.join(MR_SRC, "cli.py")}
         for path in _mr_py_files():
+            if path in wired or os.path.dirname(path) == os.path.join(MR_SRC, "judge"):
+                continue
             with open(path, encoding="utf-8") as fh:
                 self.assertIsNone(pat.search(fh.read()), f"judge import in {path}")
         self.assertFalse(os.path.isfile(os.path.join(MR_SRC, "judge.py")))

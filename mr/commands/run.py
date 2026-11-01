@@ -20,6 +20,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from mr import exitcodes as ec
 from mr import (classifier, config, hygiene, isolation, loop, patches, pipeline, prepass, redact, router, runners, scope,
                 shadow, skillsync, state)
+from mr.judge import Judge
 from mr.log import Log, now_ist
 from mr.task import Params, TaskError, load_task, normalise
 
@@ -66,7 +67,8 @@ class _Ctx:
         self.counters = {"attempts": 0, "claude_rungs": 0, "opus_rungs": 0}  # loop.count_after
         self.checklist = None
         self.replans = self.n_plan = self.n_review = self.seq = 0
-        self.shadow_judge = self.shadow_clf = None  # shadow.ShadowAnswer, set by later steps
+        self.shadow_judge = self.shadow_clf = None  # shadow.ShadowAnswer
+        self.judge = None  # judge.Judge, set by _start_judge
         self.n_clf = 0  # classifier calls made
         self.clf_pool = self.clf_future = self.clf_skip = self.clf_ref = None  # see _start_classifier
         self.clf_consulted = False
@@ -267,6 +269,7 @@ def run(args) -> int:
         ladder = ([args.rung] if args.rung else []) + [r for r in decision.ladder if r != args.rung]
     c = _Ctx(args, cfg, task, feats, decision, ladder, t0, started_at)
     _start_classifier(c)
+    _start_judge(c)
     old = _install_handlers(c)
     try:
         try:
@@ -344,6 +347,40 @@ def _join_classifier(c: _Ctx) -> None:
     finally:
         if c.clf_pool is not None:
             c.clf_pool.shutdown(wait=False, cancel_futures=True)
+
+
+def _start_judge(c: _Ctx) -> None:
+    """Shadow judge: decide whether it runs and start the route call in the background. It never acts."""
+    block = c.cfg.judge or {}
+    task = c.task
+    try:
+        if shadow.judge_mode(getattr(c.args, "judge", None), block) != "shadow":
+            return
+        c.judge = Judge(c.cfg, "shadow", c.log, task_id=task.id)
+        run_it, consulted = shadow.should_run(task.params, c.feats.confident, task.fingerprint,
+                                              block.get("sample_n", 3))
+        if run_it:
+            ref, status = c.judge.ask_route(task, c.feats, consulted), "pending"
+        else:
+            ref, status = c.judge.skip_route("skipped_confident", False), "skipped_confident"
+        c.shadow_judge = shadow.ShadowAnswer("judge", "shadow", status, ref, consulted, None, None, None, None,
+                                             (), None, None, (), None)
+    except Exception as e:
+        _say(f"judge shadow failed: {type(e).__name__}: {e}")
+        if c.judge is not None:
+            c.judge.skip_route("cli_error", False)
+        c.judge = c.shadow_judge = None
+
+
+def _join_judge(c: _Ctx) -> None:
+    """Wait for the shadow judge before the task record. Every failure is logged and ignored."""
+    if c.judge is None:
+        return
+    try:
+        c.judge.join_shadow(((c.cfg.judge or {}).get("timeouts_ms") or {}).get("decision_point", 15000) / 1000)
+        c.shadow_judge = c.judge.route_answer() or c.shadow_judge
+    except Exception as e:
+        _say(f"could not join the judge: {e}")
 
 
 def _body(c: _Ctx) -> int:
@@ -521,6 +558,7 @@ def _finalize(c: _Ctx) -> None:
     except Exception as e:
         _say(f"could not write state.json: {e}")
     _join_classifier(c)
+    _join_judge(c)
     c.log.append(_task_record(c, now_ist()))
 
 

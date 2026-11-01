@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- The shadow judge now runs: `mr run --judge shadow` (or `judge.mode: shadow`) asks Haiku the routing questions in the
+  background for unsure tasks and for one in `judge.sample_n` (default 3) confident ones, logs one `judge` record per
+  call (answers, readings, budget, cache hit or the reason it was skipped), links it from the route record and adds
+  its route to the task record. Answers never change routing, rungs, review or exits. `mr route --judge shadow`
+  prints a `judge (shadow):` line and adds a `judge_shadow` key to `--json`. `judge.repos` now defaults to `all`
+  and `--judge on` runs as shadow.
+
 - Call path for the shadow judge, still not wired into `mr run`: one guarded Haiku call through the claude wrapper
   (no lock, no reservation, no probe; it yields when the usage check is high, unreadable or, in shadow, at
   `judge.budget.shadow_five_hour_max`, default 80), a status mapping that never retries, a call budget (150 a day,

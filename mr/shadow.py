@@ -60,6 +60,13 @@ def should_run(params, prepass_confident: bool, fingerprint: str, sample_n: int 
     return int(hashlib.sha256(fingerprint.encode()).hexdigest()[:8], 16) % sample_n == 0, False
 
 
+def judge_mode(cli: str | None, block: dict | None) -> str:
+    """The judge's mode for a route task: off when ``uses.route.enabled`` is false, else the effective mode."""
+    if (((block or {}).get("uses") or {}).get("route") or {}).get("enabled") is False:
+        return "off"
+    return effective_mode(cli, block, "judge")
+
+
 def effective_mode(cli: str | None, block: dict | None, name: str = "classifier") -> str:
     """CLI value if given, else the config block's mode, else off. ``on`` is not built: it runs as shadow."""
     mode = cli or (block or {}).get("mode") or "off"

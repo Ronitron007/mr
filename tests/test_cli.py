@@ -43,8 +43,8 @@ class TestCliFlagMatrix(unittest.TestCase):
                 code, err = self._run(["route", flag, v])
                 self.assertEqual(code, exitcodes.USAGE, (flag, v, err))
                 self.assertNotIn("invalid choice", err, err)
-                if flag == "--judge" and v in ("on", "shadow"):
-                    self.assertIn("judge not built", err)
+                if flag == "--judge":
+                    self.assertNotIn("judge not built", err)
 
         prefer_ok = (
             "G-l",

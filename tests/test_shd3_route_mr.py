@@ -160,11 +160,12 @@ class RouteShadowTest(RunCase):
         self.assertIn(ON_LINE, err)
         self.assertEqual(len(fake.calls), 1)
 
-    def test_judge_shadow_keeps_not_built_line(self):
+    def test_judge_shadow_is_accepted_and_runs_with_the_classifier(self):
         fake = FakeClassifier()
         code, out, err = self.route(fake, '--judge', 'shadow', '--classifier', 'shadow')
-        self.assertIn('judge not built', err)
+        self.assertNotIn('judge not built', err)
         self.assertNotIn(NOT_BUILT, err)
+        self.assertEqual(len([ln for ln in out.splitlines() if ln.startswith('judge (shadow):')]), 1, out)
         self.assertEqual(len(fake.calls), 1)
 
 

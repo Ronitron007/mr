@@ -516,6 +516,9 @@ def _judge(raw: dict) -> None:
     haiku = backends.get("haiku") if isinstance(backends, dict) else None
     if not isinstance(haiku, dict) or haiku.get("path") != "max" or haiku.get("model") != "claude-haiku-5-5":
         raise ConfigError("judge.backends.haiku: must be path 'max' and model 'claude-haiku-5-5'")
+    n = block.get("sample_n", 3)
+    if not isinstance(n, int) or isinstance(n, bool) or n < 0:
+        raise ConfigError(f"judge.sample_n: {n!r} must be an integer >= 0")
     budget = block.get("budget")
     if isinstance(budget, dict):
         per_hour = budget.get("calls_per_hour")

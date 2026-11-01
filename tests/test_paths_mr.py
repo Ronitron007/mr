@@ -91,7 +91,7 @@ class TestPortableConfig(unittest.TestCase):
         self.assertEqual(raw['paths']['check'], '')
         self.assertEqual(raw['paths']['home'], '')
         self.assertEqual(raw['hygiene']['commands'], {})
-        self.assertEqual(raw['judge']['repos'], [])
+        self.assertEqual(raw['judge']['repos'], 'all')
         self.assertIsNone(re.search(r'/(home|Users)/[A-Za-z]', DEFAULT_YAML))
         self.assertNotIn('30 Oct', DEFAULT_YAML)
         self.assertIsInstance(DEFAULT_YAML, str)

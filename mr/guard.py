@@ -344,10 +344,18 @@ def _judge_yields(cfg, mode: str) -> tuple[bool, dict | None]:
     return mode == "shadow" and fiveh >= cap, sample
 
 
+def judge_cli_available(cfg) -> bool:
+    """True when the claude command is an executable file or is found on PATH."""
+    claude = cfg.paths.claude
+    if not claude:
+        return False
+    return (os.path.isfile(claude) and os.access(claude, os.X_OK)) or shutil.which(claude) is not None
+
+
 def run_claude_judge(prompt: str, cfg, timeout_s: float, *, mode: str, exec_fn=None) -> JudgeRunResult:
     """The only place the judge argv is built. No claude.lock, no reservation, no probe, no retry."""
     claude = cfg.paths.claude
-    if not (os.path.isfile(claude) and os.access(claude, os.X_OK)) and shutil.which(claude) is None:
+    if not judge_cli_available(cfg):
         return JudgeRunResult("cli_unavailable", None, "", "", 0.0, False, None)
     yields, sample = _judge_yields(cfg, mode)
     if yields:

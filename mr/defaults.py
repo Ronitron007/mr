@@ -69,7 +69,8 @@ judge:
     route:   {enabled: true, promoted: false, fields: all}             # partial promotion: list of field names
     spec:    {enabled: true, promoted: false, on_effect: annotate}   # annotate | human_gate | replan  (D5)
     postrun: {enabled: true, promoted: false, conformance: true, failure_class: true, max_extra_claude_per_day: 2}
-  repos: []                       # allow-list; other repos -> judge off
+  repos: "all"                    # "all" or a list of repo names; a repo not listed -> judge skipped for that task
+  sample_n: 3                     # shadow: a task the rules are confident about is still judged 1 in n (0 = never)
   backends:
     haiku: {path: max, model: claude-haiku-5-5, effort: low,   # effort: low | null (null = omit --effort), §9.3.1
             prompt: judge.v1}                                    # via the wrapper only; never cursor-agent

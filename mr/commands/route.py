@@ -10,6 +10,7 @@ from mr import classifier, shadow
 from mr import exitcodes as ec
 from mr.config import ConfigError, load
 from mr.gitmeta import read_head
+from mr.judge import Judge
 from mr.prepass import extract
 from mr.router import Decision, RouteError, decide
 from mr.task import Params, TaskError, make_task
@@ -23,8 +24,6 @@ def run(args) -> int:
         print("task text missing", file=sys.stderr)
         return ec.USAGE
     models = not getattr(args, "no_models", False)
-    if models and getattr(args, "judge", None) in ("shadow", "on"):
-        print("judge not built", file=sys.stderr)
     try:
         cfg = load(getattr(args, "config", None))
         repo = os.path.abspath(getattr(args, "repo", None) or os.getcwd())
@@ -33,6 +32,8 @@ def run(args) -> int:
         decision = decide(task, features, cfg)
         mode = shadow.effective_mode(getattr(args, "classifier", None), cfg.classifier or {}) if models else "off"
         clf = _shadow_classifier(args, cfg, task, features, mode)
+        jmode = shadow.judge_mode(getattr(args, "judge", None), cfg.judge or {}) if models else "off"
+        jdg = _shadow_judge(args, cfg, task, features, jmode)
     except (TaskError, RouteError) as exc:
         print(str(exc), file=sys.stderr)
         return ec.USAGE
@@ -44,12 +45,46 @@ def run(args) -> int:
         payload = _payload(task, features, decision, code)
         if mode == "shadow":
             payload["classifier_shadow"] = shadow.route_summary(clf)
+        if jmode == "shadow":
+            payload["judge_shadow"] = shadow.route_summary(jdg)
         print(json.dumps(payload, ensure_ascii=False))
     else:
         print(_explain(task, decision, features))
         if clf is not None:
             print(_clf_line(clf))
+        if jdg is not None:
+            print(_judge_line(jdg))
     return code
+
+
+class _NoLog:
+    """`mr route` writes no log records: the judge's own records are dropped."""
+
+    def append(self, record: dict) -> None:
+        pass
+
+
+def _shadow_judge(args, cfg, task, features, mode):
+    """Run the judge's route call in shadow, waiting for it; a ShadowAnswer or None. Never changes the decision."""
+    if mode != "shadow":
+        return None
+    run_it, consulted = shadow.should_run(task.params, features.confident, task.fingerprint,
+                                          (cfg.judge or {}).get("sample_n", 3))
+    if not (run_it or getattr(args, "judge", None) in ("shadow", "on")):
+        return None
+    try:
+        judge = Judge(cfg, "shadow", _NoLog(), task_id=task.id)
+        judge.ask_route(task, features, consulted)
+        judge.join_shadow(((cfg.judge or {}).get("timeouts_ms") or {}).get("decision_point", 15000) / 1000)
+        return judge.route_answer()
+    except Exception:
+        return None
+
+
+def _judge_line(ans) -> str:
+    unsure = ",".join(ans.unsure_fields) or "-"
+    return (f"judge (shadow): route={ans.route or '-'} type={ans.type or '-'} difficulty={ans.difficulty or '-'} "
+            f"risk={ans.risk or '-'} unsure={unsure} status={ans.status}")
 
 
 def _shadow_classifier(args, cfg, task, features, mode):

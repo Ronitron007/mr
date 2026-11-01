@@ -236,8 +236,6 @@ def main(argv: list[str] | None) -> int:
     args.json = json_out
     args.verbose = verbose
     args.command = cmd
-    if cmd in ("run", "route") and args.judge in ("on", "shadow"):
-        print("judge not built; running as off", file=sys.stderr)
     try:
         mod = importlib.import_module("mr.commands." + cmd)
         return int(mod.run(args))
