@@ -33,7 +33,8 @@ def run(args) -> int:
         mode = shadow.effective_mode(getattr(args, "classifier", None), cfg.classifier or {}) if models else "off"
         clf = _shadow_classifier(args, cfg, task, features, mode)
         jmode = shadow.judge_mode(getattr(args, "judge", None), cfg.judge or {}) if models else "off"
-        jdg = _shadow_judge(args, cfg, task, features, jmode)
+        found = facts.try_build(task.text, repo, task.files_named)
+        jdg = _shadow_judge(args, cfg, task, features, jmode, found)
     except (TaskError, RouteError) as exc:
         print(str(exc), file=sys.stderr)
         return ec.USAGE
@@ -41,7 +42,6 @@ def run(args) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return ec.USAGE
     code = _exit_code(decision)
-    found = facts.try_build(task.text, repo, task.files_named)
     if getattr(args, "json", False):
         payload = _payload(task, features, decision, code)
         payload["facts"], payload["risk_evidence"] = facts.record_parts(found)
@@ -75,7 +75,7 @@ class _NoLog:
         pass
 
 
-def _shadow_judge(args, cfg, task, features, mode):
+def _shadow_judge(args, cfg, task, features, mode, found=None):
     """Run the judge's route call in shadow, waiting for it; a ShadowAnswer or None. Never changes the decision."""
     if mode != "shadow":
         return None
@@ -85,7 +85,7 @@ def _shadow_judge(args, cfg, task, features, mode):
         return None
     try:
         judge = Judge(cfg, "shadow", _NoLog(), task_id=task.id)
-        judge.ask_route(task, features, consulted)
+        judge.ask_route(task, features, consulted, facts=found if isinstance(found, facts.Facts) else None)
         judge.join_shadow(((cfg.judge or {}).get("timeouts_ms") or {}).get("decision_point", 15000) / 1000)
         return judge.route_answer()
     except Exception:

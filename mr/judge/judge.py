@@ -11,6 +11,7 @@ import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
 
+from mr import facts as facts_mod
 from mr import guard, runners, shadow
 from mr.judge import breaker, budget, cache, client, policy
 from mr.judge import prompt as prompt_mod
@@ -20,6 +21,7 @@ from mr.judge import state as state_mod
 BACKEND = "haiku"
 USE = "route"
 QSET = "route.v1"
+QSET_V2 = "route.v2"
 _NO_CALL = frozenset({"guard_yield", "cli_unavailable"})  # the client reports these without running claude
 
 
@@ -53,7 +55,9 @@ class Judge:
         self.cfg, self.log, self.task_id, self._exec = cfg, log, task_id, exec_fn
         self.mode = "shadow"  # "on" is not built: it runs as shadow
         self._block = cfg.judge or {}
-        self._questions = qmod.load(QSET)
+        self._qset = self._block.get("qset", QSET_V2)
+        self._v2 = self._qset == QSET_V2
+        self._questions = qmod.load(self._qset)
         self._qset_sha = qmod.qset_sha(self._questions)
         self._pool = ThreadPoolExecutor(max_workers=2, thread_name_prefix="mr-judge")
         self._lock = threading.Lock()
@@ -67,12 +71,12 @@ class Judge:
 
     # --- public API ---------------------------------------------------------
 
-    def ask_route(self, task, features, consulted: bool) -> str:
+    def ask_route(self, task, features, consulted: bool, facts=None) -> str:
         """Start one route call in the background and return its ref ("j-<task>-<n>"). Never raises."""
         ref = self._next_ref()
         self._recs[ref] = self._blank(ref, consulted)
         try:
-            self._futures[ref] = self._pool.submit(self._run, ref, task, features, consulted)
+            self._futures[ref] = self._pool.submit(self._run, ref, task, features, consulted, facts)
         except Exception:
             self._finish(ref, "cli_error", None)
         return ref
@@ -117,16 +121,16 @@ class Judge:
 
     # --- one call -------------------------------------------------------------
 
-    def _run(self, ref: str, task, features, consulted: bool) -> None:
+    def _run(self, ref: str, task, features, consulted: bool, facts=None) -> None:
         rec = self._recs[ref]
         answer, status = None, "cli_error"
         try:
-            answer, status = self._steps(ref, rec, task, features, consulted)
+            answer, status = self._steps(ref, rec, task, features, consulted, facts)
         except Exception:
             pass
         self._finish(ref, status, answer)
 
-    def _steps(self, ref: str, rec: dict, task, features, consulted: bool):
+    def _steps(self, ref: str, rec: dict, task, features, consulted: bool, facts=None):
         """The route call of §9.11. Returns (ShadowAnswer | None, status); a failing step ends the call."""
         cfg, block = self.cfg, self._block
         name = os.path.basename(task.repo)
@@ -137,17 +141,17 @@ class Judge:
             return None, "cli_unavailable"
         if not breaker.allow(cfg, BACKEND):
             return None, "breaker_open"
-        built = state_mod.build_route_state(task, features, cfg, name, self._questions)
-        rec.update(state_sha=built.state_sha, state_bytes=built.state_bytes, state_tokens_est=built.est_tokens,
-                   redactions=built.redactions, truncated=built.truncated, egress=built.egress)
+        questions, qsha, built, rules, facts = self._prepare(task, features, name, facts)
+        rec.update(qset_sha=qsha, state_sha=built.state_sha, state_bytes=built.state_bytes,
+                   state_tokens_est=built.est_tokens, redactions=built.redactions, truncated=built.truncated,
+                   egress=built.egress)
         if built.status:
             return None, built.status
         if built.egress == "off":
             return None, "egress_off"
-        key = cache.make_key(USE, BACKEND, rec["model_req"], rec["effort"], rec["prompt_sha"], self._qset_sha,
+        key = cache.make_key(USE, BACKEND, rec["model_req"], rec["effort"], rec["prompt_sha"], qsha,
                              built.state_sha)
         hit = self._from_cache(cache.get(cfg, key))
-        rules = {"risk": features.risk_floor, "scope": _scope_level(features)}
         if hit is not None:
             parsed, rec["model_served"] = hit
             return self._read(ref, rec, parsed, rules, "cache_hit", consulted), "cache_hit"
@@ -155,7 +159,8 @@ class Judge:
         rec["budget_after"] = after
         if not allowed:
             return None, reason
-        text, qmap = prompt_mod.render_prompt(built.state, self._questions)
+        render = prompt_mod.render_prompt_v2 if self._v2 else prompt_mod.render_prompt
+        text, qmap = render(built.state, questions)
         with self._lock:
             self._calls += 1
         rec["pts_est"] = (self._block.get("budget") or {}).get("est_pts_per_call", 0.2)
@@ -170,19 +175,36 @@ class Judge:
         if raw.status != "ok":
             breaker.record(cfg, BACKEND, raw.status)
             return None, raw.status
-        parsed = prompt_mod.parse_answers(raw.result_text or "", qmap, self._questions)
+        if self._v2:
+            parsed = prompt_mod.parse_answers_v2(raw.result_text or "", qmap, questions, facts, built.state["task"])
+        else:
+            parsed = prompt_mod.parse_answers(raw.result_text or "", qmap, questions)
         breaker.record(cfg, BACKEND, parsed.status)
         if parsed.status == "invalid_response":
             return None, parsed.status
         usage = {"input_tokens": raw.input_tokens, "output_tokens": raw.output_tokens, "usd_equiv": raw.usd_equiv,
                  "duration_api_ms": raw.duration_api_ms}
         stored = {"status": parsed.status, "answers": parsed.answers, "unsure": list(parsed.unsure)}
-        cache.put(cfg, key, use=USE, backend=BACKEND, qset_sha=self._qset_sha, answers=stored, usage=usage,
+        cache.put(cfg, key, use=USE, backend=BACKEND, qset_sha=qsha, answers=stored, usage=usage,
                   model_served=raw.model_served)
         return self._read(ref, rec, parsed, rules, parsed.status, consulted), parsed.status
 
+    def _prepare(self, task, features, name: str, facts):
+        """(questions, qset_sha, BuiltState, rules, facts) for this call; route.v2 expands the questions from the facts."""
+        if not self._v2:
+            built = state_mod.build_route_state(task, features, self.cfg, name, self._questions)
+            return (self._questions, self._qset_sha, built,
+                    {"risk": features.risk_floor, "scope": _scope_level(features)}, None)
+        if facts is None:
+            facts = facts_mod.build_facts(task.text, task.repo, hints=task.files_named)
+        questions = qmod.expand_v2(self._questions, facts)
+        rules = {"type": features.type, "difficulty": features.difficulty_est, "risk": features.risk_floor}
+        built = state_mod.build_route_state_v2(task, facts, self.cfg, name, questions, rules=rules)
+        return questions, qmod.qset_sha(questions), built, rules, facts
+
     def _read(self, ref: str, rec: dict, parsed, rules: dict, status: str, consulted: bool):
-        decisions = policy.read_route(parsed, rules, self.cfg)
+        read = policy.read_route_v2 if self._v2 else policy.read_route
+        decisions = read(parsed, rules, self.cfg)
         rec.update(answers=parsed.answers, decisions=decisions)
         return policy.to_shadow(parsed, decisions, ref=ref, status=status, consulted=consulted,
                                 latency_ms=rec["latency_ms"])
@@ -207,10 +229,10 @@ class Judge:
     def _blank(self, ref: str, consulted: bool) -> dict:
         haiku = (self._block.get("backends") or {}).get(BACKEND) or {}
         return {
-            "role": "judge", "task": self.task_id, "ref": ref, "use": USE, "qset": QSET, "qset_sha": self._qset_sha,
+            "role": "judge", "task": self.task_id, "ref": ref, "use": USE, "qset": self._qset, "qset_sha": self._qset_sha,
             "mode": self.mode, "backend": BACKEND, "effort": haiku.get("effort"),
             "model_req": haiku.get("model", guard.JUDGE_MODEL), "model_served": None, "status": None,
-            "exit_code": None, "latency_ms": None, "duration_api_ms": None, "prompt_sha": prompt_mod.prompt_sha(),
+            "exit_code": None, "latency_ms": None, "duration_api_ms": None, "prompt_sha": prompt_mod.prompt_sha(2 if self._v2 else 1),
             "state_sha": None, "state_bytes": 0, "state_tokens_est": 0, "input_tokens": None,
             "output_tokens": None, "usd_equiv": None, "pts_est": 0, "redactions": {}, "truncated": False,
             "egress": self._block.get("egress", "excerpts"), "answers": {}, "decisions": {}, "applied": [],

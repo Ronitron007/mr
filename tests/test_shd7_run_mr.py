@@ -74,7 +74,7 @@ class JudgeRunCase(RunCase):
         self.env['MR_HOME'] = self.home
 
     def write_cfg(self):
-        block = {'timeouts_ms': {'call': 600000, 'decision_point': 300000}}
+        block = {'qset': 'route.v1', 'timeouts_ms': {'call': 600000, 'decision_point': 300000}}
         block.update(self.judge or {})
         raw = {'paths': {'home': self.home, 'cursor_agent': gitfix.FAKE_CURSOR, 'claude': gitfix.FAKE_CLAUDE,
                          'check': gitfix.FAKE_CHECK}, 'judge': block}

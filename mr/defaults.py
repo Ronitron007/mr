@@ -64,6 +64,7 @@ classifier: {model: grok-4.7-low, mode: off, timeout_s: 30, min_conf: 0.6, cache
 judge:
   mode: "off"                     # off | shadow | on. Optional block; `off` until Phase 2 builds the judge, then `shadow`
   backend: haiku                  # the only default ("for now"); comparison backends below are off
+  qset: route.v2                  # route.v1 | route.v2: the question set the shadow judge asks (v2 adds files and tag evidence)
   egress: excerpts                # off | metadata | excerpts   (§12.2; D2 closed: same vendor as the Claude rungs)
   uses:
     route:   {enabled: true, promoted: false, fields: all}             # partial promotion: list of field names

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- The shadow judge now asks question set `route.v2` by default (`judge.qset`, `route.v1` or `route.v2`): it also answers which files the change edits and creates, whether the candidate list is complete, and quotes the words that make a risk tag apply. The answers are logged only; no routing decision changes.
+
 - New facts stage, logged only. For every task `mr` now works out which files it is about (named files, whether they
   exist, directory and glob matches, files that mention a backticked or CamelCase/snake_case name, and sibling
   tests), which risk words came from the text and which from file paths, which candidate paths are sensitive, and a

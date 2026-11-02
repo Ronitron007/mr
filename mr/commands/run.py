@@ -361,7 +361,8 @@ def _start_judge(c: _Ctx) -> None:
         run_it, consulted = shadow.should_run(task.params, c.feats.confident, task.fingerprint,
                                               block.get("sample_n", 3))
         if run_it:
-            ref, status = c.judge.ask_route(task, c.feats, consulted), "pending"
+            given = c.facts if isinstance(c.facts, facts.Facts) else None
+            ref, status = c.judge.ask_route(task, c.feats, consulted, facts=given), "pending"
         else:
             ref, status = c.judge.skip_route("skipped_confident", False), "skipped_confident"
         c.shadow_judge = shadow.ShadowAnswer("judge", "shadow", status, ref, consulted, None, None, None, None,

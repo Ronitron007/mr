@@ -66,6 +66,58 @@ def read_route(parsed, rules: dict, cfg) -> dict:
     return out
 
 
+def _conf(compact) -> float | None:
+    if compact is None:
+        return None
+    return compact["conf"] if "conf" in compact else max(compact["p"], 1 - compact["p"])
+
+
+def _tri(p: float, yes_p: float, no_p: float) -> bool | None:
+    if p >= yes_p - _EPS:
+        return True
+    return False if p <= 1 - no_p + _EPS else None
+
+
+def _read_files(answers: dict, act_p: float) -> dict:
+    def listed(qid, key):
+        got = answers.get(qid)
+        return list(got[key]) if got else []
+
+    complete = answers.get("files.complete")
+    return {"change": listed("files.change", "picks"), "new": listed("files.new", "paths"),
+            "complete": _tri(complete["p"], act_p, act_p) if complete else None,
+            "conf": {"change": _conf(answers.get("files.change")), "new": _conf(answers.get("files.new")),
+                     "complete": _conf(complete)}}
+
+
+def _read_tag(compact, raise_p: float, act_p: float) -> dict:
+    if compact is None:
+        return {"changes_behavior": None, "evidence": None, "quote_found": False, "conf": None}
+    return {"changes_behavior": _tri(compact["p"], raise_p, act_p), "evidence": compact.get("evidence"),
+            "quote_found": bool(compact.get("quote_found")), "conf": _conf(compact)}
+
+
+def read_route_v2(parsed, rules: dict, cfg) -> dict:
+    """v1-style reading per fixed field (plus conf), and the files and tags readings. tag.* and files.* are not keys."""
+    act_p, raise_p = _thresholds(cfg)
+    known = SOFT | RAISE_NOUL | RAISE_SCORE
+    out = {}
+    for qid in [*parsed.answers, *parsed.unsure]:
+        if qid.startswith(("tag.", "files.")):
+            continue
+        compact = parsed.answers.get(qid)
+        if compact is None:
+            out[qid] = {"decision": "unsure" if qid in known else "ignored", "value": None, "conf": None}
+        elif qid in known:
+            out[qid] = dict(_read_one(qid, compact, rules, act_p, raise_p), conf=_conf(compact))
+        else:
+            out[qid] = {"decision": "ignored", "value": None, "conf": _conf(compact)}
+    out["files"] = _read_files(parsed.answers, act_p)
+    out["tags"] = {qid[4:]: _read_tag(parsed.answers.get(qid), raise_p, act_p)
+                   for qid in [*parsed.answers, *parsed.unsure] if qid.startswith("tag.")}
+    return out
+
+
 def to_shadow(parsed, decisions: dict, *, ref, status, consulted, latency_ms) -> ShadowAnswer:
     def value(qid, kinds):
         d = decisions.get(qid)
@@ -75,10 +127,15 @@ def to_shadow(parsed, decisions: dict, *, ref, status, consulted, latency_ms) ->
         idx = value(qid, kinds)
         return names[idx] if idx is not None else None
 
-    tags = sorted(
-        _TAG_NAMES.get(qid, qid.split(".", 1)[1])
-        for qid, d in decisions.items() if qid.startswith("tag.") and d["decision"] in ("raise", "act"))
-    unsure = sorted(qid for qid, d in decisions.items() if d["decision"] == "unsure")
+    if "tags" in decisions:  # a route.v2 reading: tags come from the evidence answers
+        tags = sorted(t for t, d in decisions["tags"].items() if d["changes_behavior"] is True)
+        flat = {qid: d for qid, d in decisions.items() if qid not in ("files", "tags")}
+    else:
+        tags = sorted(
+            _TAG_NAMES.get(qid, qid.split(".", 1)[1])
+            for qid, d in decisions.items() if qid.startswith("tag.") and d["decision"] in ("raise", "act"))
+        flat = decisions
+    unsure = sorted(qid for qid, d in flat.items() if d["decision"] == "unsure")
     return ShadowAnswer(
         source="judge", mode="shadow", status=status, ref=ref, consulted=consulted,
         route=value("route_class", ("act",)), type=value("task_type", ("act",)),

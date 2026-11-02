@@ -94,3 +94,42 @@ def build_route_state(task, features, cfg, repo_name: str, questions: dict, env=
         status = "too_long"
     egress = "metadata" if "secrets" in features.risk_tags else judge.get("egress", "excerpts")
     return BuiltState(state, hashlib.sha256(data).hexdigest()[:16], len(data), est, counts, truncated, egress, status)
+
+
+def build_route_state_v2(task, facts, cfg, repo_name: str, questions: dict, env=None, rules=None) -> BuiltState:
+    """The mr.route.v2 state: the facts stage output only. It never reads task.params or task.files_named."""
+    judge = getattr(cfg, "judge", None) or {}
+    stack = (judge.get("stacks") or {}).get(repo_name)
+    rules = rules or {}
+    raw = {
+        "kind": "mr.route.v2",
+        "task": task.text[:TASK_CHARS],
+        "repo": {"name": repo_name, "stack": stack if isinstance(stack, str) else None,
+                 "size_files": facts.repo_files},
+        "facts": {
+            "path_tokens": list(facts.path_tokens),
+            "paths_exist": {},
+            "candidates": [{"path": c.path, "why": list(c.why)} for c in facts.candidates[:FILES_NAMED_MAX]],
+            "risk_candidates": [{"tag": i.tag, "source": i.source, "quote": i.quote}
+                                for i in facts.risk_evidence if i.source == "text"],
+            "sensitive_paths": list(facts.sensitive_paths),
+            "type_features": facts.type_features,
+            "rules_estimate": {k: rules.get(k) for k in ("type", "difficulty", "risk")},
+        },
+    }
+    state, counts = redact.redact_obj(raw, env)
+    exist: dict[str, bool] = {}
+    for name, found in facts.paths_exist.items():  # redact_obj leaves dict keys raw
+        key, key_counts = redact.redact(name, env)
+        exist[key] = exist.get(key, False) or bool(found)
+        for kind, n in key_counts.items():
+            counts[kind] = counts.get(kind, 0) + n
+    state["facts"]["paths_exist"] = exist
+    per_token = judge.get("token_estimate_bytes_per_token") or DEFAULT_BYTES_PER_TOKEN
+    limit = (judge.get("state_limits_tokens") or {}).get("route", DEFAULT_LIMIT_TOKENS)
+    data = _canon(state)
+    est = math.ceil(len(data) / per_token) + math.ceil(len(_canon(questions)) / per_token)
+    status = "redaction_abort" if redact.too_many(counts) else "too_long" if est > limit else None
+    secret_path = any(i.source == "path" and i.tag == "secrets" for i in facts.risk_evidence)
+    egress = "metadata" if secret_path else judge.get("egress", "excerpts")
+    return BuiltState(state, hashlib.sha256(data).hexdigest()[:16], len(data), est, counts, False, egress, status)

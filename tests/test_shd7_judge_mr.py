@@ -125,8 +125,7 @@ class JudgeCase(unittest.TestCase):
 
     def cfg(self, claude=None, **judge):
         over = {'paths': {'home': self.home, 'check': gitfix.FAKE_CHECK, 'claude': claude or self.wrapper}}
-        if judge:
-            over['judge'] = judge
+        over['judge'] = {'qset': 'route.v1', **judge}
         return config.from_dict(config._deep_merge(defaults(), over))
 
     def mod(self):
