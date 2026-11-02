@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- New facts stage, logged only. For every task `mr` now works out which files it is about (named files, whether they
+  exist, directory and glob matches, files that mention a backticked or CamelCase/snake_case name, and sibling
+  tests), which risk words came from the text and which from file paths, which candidate paths are sensitive, and a
+  few type features. The route record gets `facts` (counts) and `risk_evidence` (risk words with redacted quotes, or
+  paths); `mr route --json` adds the same two keys and the text output adds a `facts:` line, also with `--no-models`.
+  It makes no model call and never changes a decision, ladder, prompt or exit code; a failure is logged as an error.
 - New `mr eval` command: an offline report on the shadow judge and classifier. It reads the run log (and an optional
   labels file, by default `eval/labels.jsonl` in the data directory) and writes a Markdown report with the rules,
   judge, classifier and judge+classifier arms, accuracy, calibration, threshold sweeps (`--sweep`), ops numbers and a

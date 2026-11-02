@@ -18,8 +18,8 @@ from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures import TimeoutError as FutureTimeout
 
 from mr import exitcodes as ec
-from mr import (classifier, config, hygiene, isolation, loop, patches, pipeline, prepass, redact, router, runners, scope,
-                shadow, skillsync, state)
+from mr import (classifier, config, facts, hygiene, isolation, loop, patches, pipeline, prepass, redact, router,
+                runners, scope, shadow, skillsync, state)
 from mr.judge import Judge
 from mr.log import Log, now_ist
 from mr.task import Params, TaskError, load_task, normalise
@@ -268,6 +268,7 @@ def run(args) -> int:
     else:  # --rung X without --once puts X first, like --prefer
         ladder = ([args.rung] if args.rung else []) + [r for r in decision.ladder if r != args.rung]
     c = _Ctx(args, cfg, task, feats, decision, ladder, t0, started_at)
+    c.facts = facts.try_build(task.text, task.repo, task.files_named)
     _start_classifier(c)
     _start_judge(c)
     old = _install_handlers(c)

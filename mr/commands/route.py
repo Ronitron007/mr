@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import asdict
 
-from mr import classifier, shadow
+from mr import classifier, facts, shadow
 from mr import exitcodes as ec
 from mr.config import ConfigError, load
 from mr.gitmeta import read_head
@@ -41,8 +41,10 @@ def run(args) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return ec.USAGE
     code = _exit_code(decision)
+    found = facts.try_build(task.text, repo, task.files_named)
     if getattr(args, "json", False):
         payload = _payload(task, features, decision, code)
+        payload["facts"], payload["risk_evidence"] = facts.record_parts(found)
         if mode == "shadow":
             payload["classifier_shadow"] = shadow.route_summary(clf)
         if jmode == "shadow":
@@ -50,11 +52,20 @@ def run(args) -> int:
         print(json.dumps(payload, ensure_ascii=False))
     else:
         print(_explain(task, decision, features))
+        print(_facts_line(found))
         if clf is not None:
             print(_clf_line(clf))
         if jdg is not None:
             print(_judge_line(jdg))
     return code
+
+
+def _facts_line(found) -> str:
+    counts, _evidence = facts.record_parts(found)
+    if "error" in counts:
+        return f"facts: unavailable ({counts['error']})"
+    return (f"facts: {counts['candidates']} candidates ({counts['exists']} exist, {counts['new']} new), "
+            f"sensitive: {counts['sensitive']}")
 
 
 class _NoLog:

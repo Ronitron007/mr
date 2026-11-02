@@ -79,7 +79,7 @@ class TestCliRoute(unittest.TestCase):
             doc = json.loads(out)
             self.assertEqual(
                 set(doc),
-                {"task_id", "fingerprint", "features", "decision", "reasons", "exit"},
+                {"task_id", "fingerprint", "features", "decision", "reasons", "exit", "facts", "risk_evidence"},
             )
             self.assertEqual(doc["exit"], 0)
             self.assertIsInstance(doc["features"]["risk_tags"], list)

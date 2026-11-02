@@ -154,6 +154,11 @@ def check(record: dict) -> list[str]:
         _req_bool(record, "invariant_violation", problems)
         for key in ("judge", "classifier"):
             _req_opt_dict(record, key, problems)
+        if "facts" in record and not isinstance(record["facts"], dict):
+            problems.append("facts must be dict")
+        ev = record.get("risk_evidence", [])
+        if not isinstance(ev, list) or not all(isinstance(item, dict) for item in ev):
+            problems.append("risk_evidence must be list of dicts")
     elif role == "task":
         if not isinstance(record.get("shadow"), dict):
             problems.append("shadow must be dict")

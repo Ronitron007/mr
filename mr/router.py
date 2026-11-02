@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from mr import facts as facts_mod
 from mr import shadow
 from mr.config import Config, _match
 from mr.prepass import Features
@@ -112,8 +113,9 @@ def check_invariants(d: Decision, f: Features, task: Task, cfg: Config) -> None:
             raise InvariantError("I3")
 
 
-def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None) -> dict:
-    """§7.4 route record; pipeline.start appends it. ``judge``/``clf`` are shadow answers or None."""
+def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None, facts=None) -> dict:
+    """§7.4 route record; pipeline.start appends it. ``judge``/``clf`` are shadow answers or None.
+    ``facts`` is a facts.Facts, or the exception its build raised; None leaves the facts keys out."""
     rules = {
         "route": d.route,
         "type": d.type,
@@ -123,7 +125,7 @@ def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None) -> 
     }
     applied = dict(rules)
     applied["ladder"] = list(d.ladder)
-    return {
+    rec = {
         "role": "route",
         "task": task.id,
         "fingerprint": task.fingerprint,
@@ -135,6 +137,9 @@ def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None) -> 
         "sources": dict(d.sources),
         "invariant_violation": False,
     }
+    if facts is not None:
+        rec["facts"], rec["risk_evidence"] = facts_mod.record_parts(facts)
+    return rec
 
 
 def _resolve_type(task: Task, f: Features) -> tuple[str, str]:

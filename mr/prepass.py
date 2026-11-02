@@ -137,6 +137,12 @@ _RISK_RES: tuple[tuple[str, re.Pattern[str], re.Pattern[str]], ...] = tuple(
 )
 
 
+# Public views of the risk tables for mr.facts: (tag, text_regex, path_regex) and the tag tiers.
+RISK_PATTERNS = _RISK_RES
+HIGH_TAGS = _HIGH
+MEDIUM_TAGS = _MED
+
+
 def _strip_token(token: str) -> str:
     return token.lstrip(_LEAD).rstrip(_TRAIL)
 

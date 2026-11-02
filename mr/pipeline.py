@@ -23,7 +23,8 @@ def start(c) -> int | None:
     a, cfg, task, d = c.args, c.cfg, c.task, c.d
     home, repo = cfg.paths.home, task.repo
     c.log.append(router.route_record(task, c.feats, d, judge=getattr(c, "shadow_judge", None),
-                                     clf=getattr(c, "shadow_clf", None)))
+                                     clf=getattr(c, "shadow_clf", None),
+                                     facts=getattr(c, "facts", None)))
     if d.route == "design" and a.route is None:
         return c.stop(ec.HUMAN, DESIGN)
 
