@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass, replace
 from datetime import datetime
 
-from mr import (acceptance, advisor, classify, exitcodes, guard, hygiene, isolation, patches,
+from mr import (acceptance, advisor, classify, droid, exitcodes, guard, hygiene, isolation, patches,
                 pipeline, planner, review, runners, scope, state)
 from mr.log import IST, now_ist, read as _read_runs
 
@@ -416,13 +416,91 @@ def _handoff(c, o: dict, cur: str, reset: bool) -> str:
     return text[:4000]
 
 
+_DROID_RUNGS = frozenset({"S", "S+"})
+_DROID_FALLBACK = {"credits": "credits_exhausted", "auth": "auth_failed", "transient": None}
+
+
+def droid_twin(cfg, code: str) -> dict | None:
+    """The droid twin for rung S or S+ when droid can run it now, else None."""
+    twins = (getattr(cfg, "droid", None) or {}).get("twins") or {}
+    if code not in _DROID_RUNGS or code not in twins or not droid.available(cfg, time.time())[0]:
+        return None
+    return twins[code]
+
+
+def _restore_tree(c, snap: str, model: str) -> None:
+    """Undo whatever a failed droid run left in the tree (saved as a patch first)."""
+    repo, home = c.task.repo, c.cfg.paths.home
+    diff = patches.cumulative_diff(repo, snap)
+    if not diff:
+        return
+    path = patches.save_patch(home, c.task.id, len(c.rungs) + 1, f"droid-{model}", diff)
+    res = patches.reset(repo, snap, path, home, c.task.id)
+    if not res.ok:
+        raise RuntimeError(f"droid fallback: could not restore the tree: {res.reason}; saved {', '.join(res.saved)}")
+
+
+def _droid_attempt(c, code: str, twin: dict, prompt: str, attempt: int):
+    """Run the rung on droid. Returns (rr, None) when that result is the attempt, else (rr, droid_try)
+    after the tree is restored; the caller then runs the same rung on the claude CLI."""
+    cfg = c.cfg
+    snap = patches.take_reset_tree(c.task.repo)
+    rr = runners.run_droid(code, twin, prompt, c.task.repo, cfg.timeouts.rung_s["droid"],
+                           cfg=cfg, task=c.task.id, attempt=attempt)
+    why, now = rr.droid_failure, time.time()
+    if why not in _DROID_FALLBACK:
+        if not rr.is_error and droid.read_state(cfg)["status"] != "ok":
+            droid.write_state(cfg, "ok", now)
+        return rr, None
+    status = _DROID_FALLBACK[why]
+    if status:
+        st = droid.write_state(cfg, status, now, rr.result_text or rr.stderr_tail)
+        until = datetime.fromtimestamp(st["recheck_after"], IST).strftime("%Y-%m-%d %H:%M IST")
+        print(f"droid: {status}, falling back to the claude CLI until {until}", file=sys.stderr)
+    else:
+        print("droid: transient API error, falling back to the claude CLI for this attempt", file=sys.stderr)
+    _restore_tree(c, snap, twin["model"])
+    return rr, {"backend": "droid", "fallback": why, "wall_s": round(rr.wall_s, 2), "rc": rr.rc,
+                "raw": rr.raw_path + ".out"}
+
+
+def run_rung(c, code: str, prompt: str, attempt: int):
+    """Run one implementer rung on its backend. Returns (rr, guarded, droid_try).
+
+    Cursor rungs run on cursor-agent. Rung S or S+ with a droid twin runs on droid first (no claude guard
+    check, no reservation); a credits, auth or transient failure falls back to the claude CLI in the same attempt.
+    """
+    cfg, repo, rung = c.cfg, c.task.repo, c.cfg.rungs[code]
+    if rung.path == "cursor":
+        return runners.run_cursor(rung.model, prompt, repo, None, cfg.timeouts.rung_s["cursor"],
+                                  cfg=cfg, task=c.task.id, attempt=attempt), None, None
+    sub = None
+    if (twin := droid_twin(cfg, code)) is not None:
+        rr, sub = _droid_attempt(c, code, twin, prompt, attempt)
+        if sub is None:
+            return rr, None, None
+    guarded, rr = runners.run_claude(code, prompt, repo, "acceptEdits", None, cfg.timeouts.rung_s["claude"],
+                                     cfg=cfg, task=c.task.id, attempt=attempt, wait_lock_s=c.args.wait_lock_s)
+    return rr, guarded, sub
+
+
+def denied(guarded, rr) -> bool:
+    """A claude rung the guard (or the wrapper) refused. A cursor or droid run has no guard result."""
+    return guarded is not None and (rr is None or guarded.wrapper_denied or rr.rc == 75)
+
+
+def tag_record(rec: dict, rr, droid_try: dict | None) -> dict:
+    rec["backend"], rec["droid_try"] = rr.backend, droid_try
+    return rec
+
+
 def _rung(c, code: str, kind: str, handoff: str) -> dict:
     """Run one rung, then violation, patch, D, H, A, C, class. Returns the outcome dict."""
-    a, cfg, task, d = c.args, c.cfg, c.task, c.d
+    cfg, task, d = c.cfg, c.task, c.d
     repo, name, rung = task.repo, os.path.basename(task.repo), cfg.rungs[code]
     c.seq += 1
     attempt, c.cur, c.in_rung = c.seq, code, True
-    prompt, before, started, guarded = _prompt(c, handoff), isolation.snapshot(repo), now_ist(), None
+    prompt, before, started = _prompt(c, handoff), isolation.snapshot(repo), now_ist()
     if code == "S+A":  # §5.2: the injected instruction goes at the end of the user prompt
         dec = getattr(c, "adv_dec", None)
         if dec is not None and dec.consult:
@@ -431,20 +509,14 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
                 focus=", ".join(sorted(getattr(c, "adv_sf", None) or ())) or "correctness of the change",
                 high_risk_paths=_scope_paths(c))
     out = {"cls": None, "why": "", "keep": True, "A": [], "H": [], "D": [], "C": [], "stop": None}
-    if rung.path == "cursor":
-        rr = runners.run_cursor(rung.model, prompt, repo, None, cfg.timeouts.rung_s["cursor"],
-                                cfg=cfg, task=task.id, attempt=attempt)
-    else:
-        guarded, rr = runners.run_claude(code, prompt, repo, "acceptEdits", None,
-                                         cfg.timeouts.rung_s["claude"], cfg=cfg, task=task.id,
-                                         attempt=attempt, wait_lock_s=a.wait_lock_s)
-        if rr is None or guarded.wrapper_denied or rr.rc == 75:
-            c.in_rung = False
-            c.frees_hint = guarded.guard.frees_hint or "≈ in 60 min"
-            c.rungs.append({"rung": code, "model": rung.model, "class": "guard_deny", "signals": {},
-                            "patch": None})
-            return dict(out, cls="guard_deny", why=f"{code} denied: "
-                        + (guarded.guard.reason if rr is None else "wrapper refused (exit 75)"))
+    rr, guarded, droid_try = run_rung(c, code, prompt, attempt)
+    if denied(guarded, rr):
+        c.in_rung = False
+        c.frees_hint = guarded.guard.frees_hint or "≈ in 60 min"
+        c.rungs.append({"rung": code, "model": rung.model, "class": "guard_deny", "signals": {},
+                        "patch": None})
+        return dict(out, cls="guard_deny", why=f"{code} denied: "
+                    + (guarded.guard.reason if rr is None else "wrapper refused (exit 75)"))
     c.counters = count_after(c.counters, "S+" if code == "S+A" else code, kind=kind)  # S+A counts as S+
     pipeline.add_cost(c.cost, rr, guarded)
     viol = isolation.violation(before, isolation.snapshot(repo), allow_new_branch=c.branch)
@@ -492,7 +564,8 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
                    and len(out["H"]) <= _MAX_NEW_H)
     c.rungs.append({"rung": code, "model": rung.model, "class": out["cls"], "signals": dict(sig),
                     "patch": c.patch_path, "failing": list(out["A"])})
-    c.log.append(pipeline.attempt_record(c, rung, code, rr, guarded, attempt, started, sig, out["cls"]))
+    c.log.append(tag_record(pipeline.attempt_record(c, rung, code, rr, guarded, attempt, started, sig, out["cls"]),
+                            rr, droid_try))
     return out
 
 
@@ -545,7 +618,7 @@ def _step(c, cur: str, cls: str) -> Step:
         replans=c.replans)
     kw = {"caps": c.cfg.caps.attempts, "fallback": tuple(c.cfg.fallback_claude_denied)}
     step = next_step(s, **kw)
-    if step.action == "rung" and step.rung in CLAUDE:
+    if step.action == "rung" and step.rung in CLAUDE and droid_twin(c.cfg, step.rung) is None:
         g = guard.check(step.rung, c.cfg)
         if not g.allow:
             c.frees_hint = g.frees_hint or "≈ in 60 min"

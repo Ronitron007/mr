@@ -8,6 +8,7 @@ paths:
   claude: claude                               # command name or absolute path. Never claude-real, never --bare
   check: ""
   cursor_agent: cursor-agent
+  droid: droid                                 # command name or absolute path (Factory droid CLI, BYOK backend)
   home: ""
 allowed: [grok-4.7-*, composer-2.5, composer-2.5-fast, kimi-k3-low, kimi-k3-high, kimi-k3-max, kimi-k2.7-code,
           max:claude-sonnet-5-5, max:claude-opus-5-5,   # no cursor:claude-* (hard rule §0.3)
@@ -46,7 +47,7 @@ design_route:
 judgment_route: {implement: [S+], critical: [O], delegate_mechanical_subitems: true}
 escalation: {skipped: raise_effort, tried_wrong: next_rung, spec_suspect: spec_author, off_track: reset}
 caps: {attempts: {trivial: 3, easy: 3, medium: 4, hard: 4, critical: 4}, claude_rungs_per_task: 2, opus_rungs_per_task: 1}   # §10.6 (D18)
-timeouts: {rung_s: {cursor: 900, claude: 900}, planner_s: 600, reviewer_s: 600, hygiene_s: 600, acceptance_s: 300}   # §10.4
+timeouts: {rung_s: {cursor: 900, claude: 900, droid: 1800}, planner_s: 600, reviewer_s: 600, hygiene_s: 600, acceptance_s: 300}   # §10.4
 hygiene: {commands: {}}   # per repo (§10.3); exact script names from the repo's package.json
 fallback_claude_denied: [G-x]   # non-Anthropic only; cursor_same_tier removed (hard rule §0.3)
 claude_limits: {hour_max: null, five_hour_max: 85}   # hour_max null = no hourly cap; five_hour_max shared by the rung guard and the judge
@@ -94,6 +95,15 @@ judge:
            est_pts_per_call: 0.2, shadow_five_hour_max: 80}                    # shadow calls stop at this five_hour_pct
   cache: {route_ttl_days: 7, spec_ttl_days: 30, postrun_ttl_days: 30}
   breaker: {consecutive_failures: 3, open_minutes: 15}
+droid:                            # optional block; BYOK Sonnet backend for rungs S and S+ (off until enabled)
+  enabled: false
+  settings: ""                    # "" = <paths.home>/droid/settings.json (apiKey fields are ${ENV} references only)
+  auto: medium                    # low | medium
+  recheck_s: 10800                # after a credits/auth failure, use the claude CLI this long before trying droid again
+  provider_key_env: {anthropic: ANTHROPIC_API_KEY}
+  twins:
+    S:  {model: claude-sonnet-5-5, name: mr-sonnet-high, thinking_tokens: 16000, max_output: 32000}
+    S+: {model: claude-sonnet-5-5, name: mr-sonnet-xhigh, thinking_tokens: 32000, max_output: 64000}
 """
 
 

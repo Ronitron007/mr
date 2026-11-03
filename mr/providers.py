@@ -127,4 +127,5 @@ def build_config(enabled, binaries) -> dict:
     doc["paths"] = paths
     if "claude" not in chosen:
         doc["advisor"] = {"mode": "off"}
+    doc.pop("droid", None)  # droid stays off and comes from defaults at load; keeps key-env names out of the file
     return doc

@@ -35,6 +35,9 @@ _CURSOR_HAIKU = re.compile(r"cursor:.*haiku")
 _HUMAN = "+human_spec_review"
 _ANTHROPIC_ALIASES = frozenset({"sonnet", "opus", "haiku"})
 ANTHROPIC_MSG = "Anthropic models run only via the claude CLI (hard rule)"
+# droid BYOK: provider -> custom-model baseUrl and default key env var (the only place this table lives)
+DROID_PROVIDERS: dict = {"anthropic": {"base_url": "https://api.anthropic.com", "key_env": "ANTHROPIC_API_KEY"}}
+_ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
 
 
 def is_anthropic(model: str) -> bool:
@@ -64,6 +67,7 @@ class Paths:
     check: str
     cursor_agent: str
     home: str
+    droid: str = "droid"
 
 
 @dataclass(frozen=True)
@@ -145,6 +149,7 @@ class Config:
     acceptance: dict
     warnings: tuple[str, ...]
     source: str
+    droid: dict | None = None
 
 
 def load(path: str | None = None, overrides: dict | None = None) -> Config:
@@ -197,6 +202,7 @@ def validate(raw: dict) -> list[str]:
     _uses(raw, rungs, patterns)
     _classifier(raw, patterns)
     _judge(raw)
+    _droid(raw)
     _blocks(raw)
     _acceptance_block(raw)
     warnings.extend(_paths(raw))
@@ -532,6 +538,87 @@ def _judge(raw: dict) -> None:
                 raise ConfigError("judge.budget.shadow_five_hour_max: must be a number from 0 to 100")
 
 
+def _pos_int(val) -> bool:
+    return isinstance(val, int) and not isinstance(val, bool) and val > 0
+
+
+def _droid_twin(code: str, twin, raw: dict, names: set, enabled: bool) -> None:
+    """One droid twin: a Sonnet max-path rung at high/xhigh effort, no advisor, a known provider.
+
+    The rung effort rule applies only while droid is enabled: the shipped (disabled) block must not turn a
+    rung effort that clamp_effort only warns about into a config error.
+    """
+    path = f"droid.twins.{code}"
+    spec = raw["rungs"].get(code)
+    if spec is None:
+        raise ConfigError(f"{path}: rung {code!r} not defined")
+    if not isinstance(twin, dict):
+        raise ConfigError(f"{path}: expected a mapping")
+    if spec.get("path") != "max":
+        raise ConfigError(f"{path}: only a max-path rung can have a droid twin")
+    for label, model in (("rung", spec["model"]), ("twin", twin.get("model"))):
+        if not isinstance(model, str) or not fnmatch.fnmatchcase(model, "claude-sonnet-*"):
+            raise ConfigError(f"{path}: the {label} model must match claude-sonnet-* (droid is Sonnet only)")
+    if enabled and spec.get("effort") not in ("high", "xhigh"):  # the raw effort, before clamp_effort
+        raise ConfigError(f"{path}: rungs.{code}.effort must be high or xhigh for a droid twin")
+    if spec.get("advisor"):
+        raise ConfigError(f"{path}: {code!r} is an advisor rung")
+    if twin.get("provider", "anthropic") not in DROID_PROVIDERS:
+        raise ConfigError(f"{path}.provider: must be one of {', '.join(DROID_PROVIDERS)}")
+    name = twin.get("name")
+    if not isinstance(name, str) or not name:
+        raise ConfigError(f"{path}.name: missing")
+    if name in names:
+        raise ConfigError(f"{path}.name: {name!r} is used by another twin")
+    names.add(name)
+    for key in ("thinking_tokens", "max_output"):
+        if not _pos_int(twin.get(key)):
+            raise ConfigError(f"{path}.{key}: must be an int > 0")
+
+
+def _droid(raw: dict) -> None:
+    """Optional ``droid`` block (BYOK Sonnet backend for rungs S and S+)."""
+    block = raw.get("droid")
+    if block is None:
+        return
+    if not isinstance(block, dict):
+        raise ConfigError("droid: expected a mapping")
+    if not isinstance(block.get("enabled"), bool):
+        raise ConfigError("droid.enabled: must be true or false")
+    if not isinstance(block.get("settings", ""), str):
+        raise ConfigError("droid.settings: must be a path string")
+    if block.get("auto", "medium") not in ("low", "medium"):
+        raise ConfigError("droid.auto: must be low or medium")
+    if not _pos_int(block.get("recheck_s", 10800)):
+        raise ConfigError("droid.recheck_s: must be an int > 0")
+    envs = block.get("provider_key_env", {})
+    if not isinstance(envs, dict) or any(not isinstance(v, str) or not _ENV_NAME.match(v) for v in envs.values()):
+        raise ConfigError("droid.provider_key_env: must map a provider to an environment variable name")
+    twins = block.get("twins", {})
+    if not isinstance(twins, dict):
+        raise ConfigError("droid.twins: expected a mapping")
+    names: set = set()
+    for code, twin in twins.items():
+        _droid_twin(code, twin, raw, names, block["enabled"])
+
+
+def _droid_copy(raw: dict) -> dict | None:
+    """Deep copy of the droid block with the settings path, key env names and provider filled in."""
+    block = _copy_block(raw, "droid")
+    if block is None:
+        return None
+    if not block.get("settings"):
+        block["settings"] = os.path.join(raw["paths"]["home"], "droid", "settings.json")
+    block.setdefault("auto", "medium")
+    block.setdefault("recheck_s", 10800)
+    block["provider_key_env"] = {**{k: v["key_env"] for k, v in DROID_PROVIDERS.items()},
+                                 **block.get("provider_key_env", {})}
+    block.setdefault("twins", {})
+    for twin in block["twins"].values():
+        twin.setdefault("provider", "anthropic")
+    return block
+
+
 def _blocks(raw: dict) -> None:
     for key in ("review_required", "escalation", "hygiene", "worktrees"):  # cursor_paid (retired) is ignored if present
         if not isinstance(raw.get(key), dict):
@@ -542,6 +629,8 @@ def _blocks(raw: dict) -> None:
         raise ConfigError("timeouts.rung_s: missing")
     for key in ("cursor", "claude"):
         _req_int(timeouts["rung_s"], key, f"timeouts.rung_s.{key}")
+    if "droid" in timeouts["rung_s"]:
+        _req_int(timeouts["rung_s"], "droid", "timeouts.rung_s.droid")
     for key in ("planner_s", "reviewer_s", "hygiene_s", "acceptance_s"):
         _req_int(timeouts, key, f"timeouts.{key}")
     _claude_limits_block(raw)
@@ -720,6 +809,10 @@ def _paths(raw: dict) -> list[str]:
         if not paths[key]:
             raise ConfigError(f"paths.{key}: missing")
         _command_path(paths[key], key)
+    if "droid" in paths:
+        if not isinstance(paths["droid"], str) or not paths["droid"]:
+            raise ConfigError("paths.droid: missing")
+        _command_path(paths["droid"], "droid")
     if paths["check"] and not os.path.isabs(paths["check"]):
         raise ConfigError("paths.check: must be absolute")
     if not paths["home"]:
@@ -792,7 +885,8 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
     timeouts = raw["timeouts"]
     return Config(
         version=1,
-        paths=Paths(raw["paths"]["claude"], raw["paths"]["check"], raw["paths"]["cursor_agent"], raw["paths"]["home"]),
+        paths=Paths(raw["paths"]["claude"], raw["paths"]["check"], raw["paths"]["cursor_agent"], raw["paths"]["home"],
+                    raw["paths"].get("droid", "droid")),
         allowed=tuple(raw["allowed"]),
         rungs=rungs,
         ladders=ladders,
@@ -808,7 +902,7 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
             opus_rungs_per_task=raw["caps"]["opus_rungs_per_task"],
         ),
         timeouts=Timeouts(
-            rung_s=dict(timeouts["rung_s"]),
+            rung_s={"droid": 1800, **timeouts["rung_s"]},
             planner_s=timeouts["planner_s"],
             reviewer_s=timeouts["reviewer_s"],
             hygiene_s=timeouts["hygiene_s"],
@@ -841,6 +935,7 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
         acceptance=_acceptance_block(raw),
         warnings=tuple(warnings),
         source=source,
+        droid=_droid_copy(raw),
     )
 
 

@@ -143,6 +143,7 @@ The screenshots above come from scrubbed demo data.
 | `mr gc` | Clean up mr's own branches and worktrees (`--dry-run` first). |
 | `mr unlock --repo PATH` | Clear a writer lock left by a crashed run. |
 | `mr guard` | Show the Claude usage gate decision (only meaningful with a usage check script). |
+| `mr droid check / reset` | Check the optional droid (BYOK) backend, or clear its fallback state. |
 
 Exit codes: `0` accepted, `1` not accepted, `2` usage or config error, `3` needs a human, `4` refused for git
 safety, `10` Claude gate denied, `75` deferred, `70` internal error.
@@ -185,6 +186,24 @@ acceptance:
   runners: {my-app: pytest}
 timeouts: {rung_s: {cursor: 1800, claude: 900}}
 ```
+
+### Droid backend (BYOK)
+
+The Sonnet rungs `S` and `S+` can run on the [Factory](https://factory.ai) `droid` CLI with your own Anthropic API
+key instead of the `claude` CLI. It is off by default and Sonnet only (no Opus, no planner, reviewer or advisor).
+
+1. Install `droid`, put your key in the environment variable named in `droid.provider_key_env` (default
+   `ANTHROPIC_API_KEY`), and set `droid.enabled: true` in your config. mr writes a settings file under its data dir
+   (`droid/settings.json`); it holds only a `${ANTHROPIC_API_KEY}` reference, never the key, and mr refuses a
+   settings file with a literal key.
+2. When droid is usable, `S` and `S+` try it first. These calls bill your API key, so they skip the Claude usage
+   gate. The key is passed to droid children only; `claude` and `cursor-agent` children never see it.
+3. If droid reports an empty credit balance or a bad key, mr restores the tree, runs the same attempt on the
+   `claude` CLI (the droid try does not count as an attempt), and sticks to the `claude` CLI for
+   `droid.recheck_s` seconds (default 3 hours) before trying droid again. A rate-limit or overload error falls back
+   for that attempt only. An ordinary task failure counts like any other failed rung.
+4. `mr droid check --probe` makes one tiny call and reports the result (exit `0` ok, `2` no binary, `3` no key,
+   `4` bad key, `5` no credits, `1` other error); `mr droid reset` clears the sticky state.
 
 ## Safety notes
 

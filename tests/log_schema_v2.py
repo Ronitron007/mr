@@ -18,6 +18,7 @@ _OUTCOMES = frozenset(
         "unknown",
     }
 )
+_DROID_FALLBACK = frozenset({"credits", "auth", "transient"})
 _W_CODES = frozenset(f"W{i}" for i in range(8))
 
 
@@ -115,6 +116,13 @@ def _check_attempt(rec: dict, problems: list[str]) -> None:
     _req_opt_num(rec, "usd_equiv", problems)
     _req_opt_str(rec, "model_served", problems)
     _req_opt_str(rec, "item", problems)
+    if rec.get("backend") not in (None, "cursor", "claude", "droid"):
+        problems.append("backend must be cursor, claude or droid")
+    sub = rec.get("droid_try")
+    if sub is not None and not (
+        isinstance(sub, dict) and sub.get("backend") == "droid" and sub.get("fallback") in _DROID_FALLBACK
+    ):
+        problems.append("droid_try must be None or a dict with backend droid and a valid fallback")
 
 
 def check(record: dict) -> list[str]:

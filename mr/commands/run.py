@@ -386,7 +386,7 @@ def _join_judge(c: _Ctx) -> None:
 
 
 def _body(c: _Ctx) -> int:
-    a, cfg, task, d = c.args, c.cfg, c.task, c.d
+    cfg, task, d = c.cfg, c.task, c.d
     home, repo = cfg.paths.home, task.repo
     if (code := pipeline.start(c)) is not None:
         return code
@@ -403,18 +403,11 @@ def _body(c: _Ctx) -> int:
                              handoff="(first attempt)", task_id=task.id)
     before = isolation.snapshot(repo)
     attempt_started = now_ist()
-    guarded = None
-    if rung.path == "cursor":
-        rr = runners.run_cursor(rung.model, prompt, repo, None, cfg.timeouts.rung_s["cursor"],
-                                cfg=cfg, task=task.id, attempt=1)
-    else:
-        guarded, rr = runners.run_claude(
-            c.rung, prompt, repo, "acceptEdits", None, cfg.timeouts.rung_s["claude"],
-            cfg=cfg, task=task.id, attempt=1, wait_lock_s=a.wait_lock_s)
-        if rr is None or guarded.wrapper_denied or rr.rc == 75:
-            c.frees_hint = guarded.guard.frees_hint or "≈ in 60 min"
-            reason = guarded.guard.reason if rr is None else "wrapper refused (exit 75)"
-            return c.stop(ec.DEFERRED, f"claude rung {c.rung} deferred: {reason}; no fallback in --once")
+    rr, guarded, droid_try = loop.run_rung(c, c.rung, prompt, 1)
+    if loop.denied(guarded, rr):
+        c.frees_hint = guarded.guard.frees_hint or "≈ in 60 min"
+        reason = guarded.guard.reason if rr is None else "wrapper refused (exit 75)"
+        return c.stop(ec.DEFERRED, f"claude rung {c.rung} deferred: {reason}; no fallback in --once")
 
     after = isolation.snapshot(repo)
     viol = isolation.violation(before, after, allow_new_branch=c.branch)
@@ -453,7 +446,8 @@ def _body(c: _Ctx) -> int:
     pipeline.add_cost(c.cost, rr, guarded)
     c.rungs.append({"rung": c.rung, "model": rung.model, "class": cls, "signals": dict(sig),
                     "patch": c.patch_path})
-    c.log.append(pipeline.attempt_record(c, rung, c.rung, rr, guarded, 1, attempt_started, sig, cls))
+    c.log.append(loop.tag_record(pipeline.attempt_record(c, rung, c.rung, rr, guarded, 1, attempt_started, sig, cls),
+                                 rr, droid_try))
     c.save_state("finish")
 
     if viol:

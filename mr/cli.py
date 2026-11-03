@@ -122,6 +122,13 @@ def _eval_flags(p) -> None:
     p.add_argument("--sweep", action="store_true", help="print the threshold sweep table")
 
 
+def _droid_subparsers(p) -> None:
+    sub = p.add_subparsers(dest="droid_cmd", required=True, parser_class=_MrParser)
+    sub.add_parser("check", help="Binary, key, settings and state; --probe makes one tiny call"
+                   ).add_argument("--probe", action="store_true")
+    sub.add_parser("reset", help="Clear the sticky credits/auth state")
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = _MrParser(prog="mr", description="Model routing CLI")
     p.add_argument("--config", default=None)
@@ -162,6 +169,7 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sp.add_parser("setup", help="Configure provider CLIs")
     _setup_flags(setup)
     _eval_flags(sp.add_parser("eval", help="Offline shadow judge and classifier report"))
+    _droid_subparsers(sp.add_parser("droid", help="BYOK droid backend for S and S+"))
     for name in sorted(_DEFERRED):
         sp.add_parser(name, help=f"{name} (deferred in v1)")
     return p
@@ -216,6 +224,8 @@ def _cmd_parser(cmd: str) -> argparse.ArgumentParser:
         _setup_flags(p)
     elif cmd == "eval":
         _eval_flags(p)
+    elif cmd == "droid":
+        _droid_subparsers(p)
     return p
 
 
@@ -243,7 +253,7 @@ def main(argv: list[str] | None) -> int:
     if cmd in _DEFERRED:
         print(f"mr {cmd}: not built in v1 L0", file=sys.stderr)
         return ec.USAGE
-    if cmd not in ("run", "route", "guard", "review", "gc", "unlock", "log", "trace", "setup", "eval"):
+    if cmd not in ("run", "route", "guard", "review", "gc", "unlock", "log", "trace", "setup", "eval", "droid"):
         print(f"mr: unknown command {cmd!r}", file=sys.stderr)
         return ec.USAGE
     if cmd_argv in (["-h"], ["--help"]):

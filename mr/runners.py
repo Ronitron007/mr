@@ -8,7 +8,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 
-from mr import advisor, config, guard
+from mr import advisor, config, droid, guard
 
 STDERR_CAP = 64 * 1024
 STDERR_TAIL_CHARS = 2000
@@ -25,6 +25,8 @@ DISALLOWED_TOOLS = (
 )
 
 _children: set[int] = set()  # pgids of live children (for the signal handler)
+# claude keeps using the Max plan and droid never bills Factory credits: these keys reach no claude/cursor child
+_DROPPED_KEYS = frozenset({"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "FACTORY_API_KEY"})
 
 
 @dataclass(frozen=True)
@@ -45,6 +47,8 @@ class RunResult:
     usd_equiv: float | None = None
     turns: int | None = None
     model_drift: bool = False
+    backend: str | None = None  # "cursor" | "claude" | "droid"
+    droid_failure: str | None = None  # droid only: None on success, else droid.classify_failure
 
 
 # --- parsing ----------------------------------------------------------------
@@ -110,7 +114,7 @@ def _num(val) -> bool:
 def child_env(claude: bool, advisor: bool = False) -> dict:
     """advisor=True is the S+A exception to AC-RUN-3 (advisor-consult-spec G6)."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith("CLOUDFLARE_") and k != "OPENROUTER_API_KEY"}
+           if not k.startswith("CLOUDFLARE_") and k not in _DROPPED_KEYS}
     env["GIT_CONFIG_COUNT"] = "3"
     for i, val in enumerate(("https://", "git@", "ssh://")):
         env[f"GIT_CONFIG_KEY_{i}"] = "url.file:///nonexistent/.pushInsteadOf"
@@ -128,6 +132,23 @@ def cursor_argv(cfg, model: str, prompt: str, tree: str, mode: str | None) -> li
         raise config.ConfigError(config.ANTHROPIC_MSG)
     return [cfg.paths.cursor_agent, "-p", "--output-format", "json", "--model", model,
             "--trust", "--force", "--workspace", tree] + (["--mode", mode] if mode else []) + [prompt]
+
+
+def droid_argv(cfg, twin: dict, prompt_file: str, tree: str, *, probe: bool = False) -> list[str]:
+    """The only place the droid argv is built. probe=True leaves out --auto (read-only call)."""
+    auto = [] if probe else ["--auto", cfg.droid["auto"]]
+    return [cfg.paths.droid, "exec", "-o", "json", "--settings", cfg.droid["settings"],
+            "-m", droid.model_id(twin), *auto, "--cwd", tree, "--disable-builtin-skills", "-f", prompt_file]
+
+
+def droid_child_env(cfg) -> dict:
+    """child_env(False) plus the provider key variable(s). FACTORY_API_KEY never reaches droid (BYOK only)."""
+    env = child_env(False)
+    for name in droid.key_envs(cfg):
+        if os.environ.get(name):
+            env[name] = os.environ[name]
+    env.pop("FACTORY_API_KEY", None)
+    return env
 
 
 def claude_argv_tail(cfg, rung: str, prompt: str, permission_mode: str,
@@ -251,7 +272,47 @@ def run_cursor(model: str, prompt: str, tree: str, mode: str | None, timeout_s: 
         result_text=text, usage=usage, model_used=_init_model(out) or model, wall_s=wall_s,
         duration_ms=int(dur) if _num(dur) else None, mr_result=parse_mr_result(text),
         raw_path=base, stderr_tail=err[-STDERR_TAIL_CHARS:], timed_out=timed_out,
-        has_envelope=env is not None, session_id=sid if isinstance(sid, str) else None)
+        has_envelope=env is not None, session_id=sid if isinstance(sid, str) else None, backend="cursor")
+
+
+def _mask_raw_files(base: str, keys: list[str]) -> None:
+    """Replace every key value in the raw .out/.err files exec_child wrote."""
+    for ext in (".out", ".err"):
+        path = base + ext
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            old = fh.read()
+        new = droid.scrub(old, keys)
+        if new != old:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write(new)
+
+
+def run_droid(code: str, twin: dict, prompt: str, tree: str, timeout_s: int, *,
+              cfg, task: str, attempt: int, probe: bool = False) -> RunResult:
+    """One `droid exec` run on a BYOK twin. The key is masked everywhere before anything is parsed."""
+    droid.ensure_settings(cfg)
+    base = _raw_base(cfg, task, attempt, f"droid-{twin['model']}")
+    os.makedirs(os.path.dirname(base), exist_ok=True)
+    with open(f"{base}.prompt", "w", encoding="utf-8") as fh:
+        fh.write(prompt)
+    rc, out, err, wall_s, timed_out = exec_child(
+        droid_argv(cfg, twin, f"{base}.prompt", tree, probe=probe), tree, droid_child_env(cfg), timeout_s, base)
+    keys = droid.key_values(cfg)
+    _mask_raw_files(base, keys)
+    out, err = droid.scrub(out, keys), droid.scrub(err, keys)
+    env = _envelope(out)
+    env_d = env or {}
+    text = env_d.get("result") if isinstance(env_d.get("result"), str) else ""
+    usage = env_d.get("usage") if isinstance(env_d.get("usage"), dict) else {}
+    dur, turns, sid = env_d.get("duration_ms"), env_d.get("num_turns"), env_d.get("session_id")
+    tail = err[-STDERR_TAIL_CHARS:]
+    is_error = rc != 0 or env is None or bool(env_d.get("is_error")) or timed_out
+    return RunResult(
+        rc=rc, is_error=is_error, result_text=text, usage=usage, model_used=twin["model"], wall_s=wall_s,
+        duration_ms=int(dur) if _num(dur) else None, mr_result=parse_mr_result(text), raw_path=base,
+        stderr_tail=tail, timed_out=timed_out, has_envelope=env is not None,
+        session_id=sid if isinstance(sid, str) else None, turns=int(turns) if _num(turns) else None,
+        backend="droid", droid_failure=droid.classify_failure(text, tail) if is_error else None)
 
 
 def _claude_result(rung_model: str, rc: int, out: str, err: str, wall_s: float,
@@ -272,7 +333,7 @@ def _claude_result(rung_model: str, rc: int, out: str, err: str, wall_s: float,
         has_envelope=env is not None, session_id=sid if isinstance(sid, str) else None,
         usd_equiv=float(cost) if _num(cost) else None,
         turns=int(turns) if _num(turns) else None,
-        model_drift=bool(keys) and rung_model not in keys)
+        model_drift=bool(keys) and rung_model not in keys, backend="claude")
 
 
 def run_claude(rung: str, prompt: str, tree: str, permission_mode: str, json_schema: str | None,
