@@ -43,7 +43,7 @@ class LoopCase(RunCase):
         raw = {"paths": {"home": self.home, "cursor_agent": gitfix.FAKE_CURSOR,
                          "claude": gitfix.FAKE_CLAUDE, "check": gitfix.FAKE_CHECK},
                "hygiene": {"commands": {"repo": self.hygiene_cmds}},
-               "acceptance": {"runners": {"repo": "unittest"}}}
+               "acceptance": {"runners": {"repo": "unittest"}}, "judge": {"mode": "off"}}
         with open(self.cfgpath, "w", encoding="utf-8") as fh:
             json.dump(raw, fh)
 

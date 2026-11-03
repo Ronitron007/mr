@@ -532,6 +532,8 @@ def _judge(raw: dict) -> None:
         per_hour = budget.get("calls_per_hour")
         if per_hour is not None and (_plain_number(per_hour) is None or per_hour <= 0):
             raise ConfigError("judge.budget.calls_per_hour: must be null or a number > 0")
+        if "max_calls_per_task_on" in budget and not _pos_int(budget["max_calls_per_task_on"]):
+            raise ConfigError("judge.budget.max_calls_per_task_on: must be a positive integer")
         if "shadow_five_hour_max" in budget:
             cap = _plain_number(budget["shadow_five_hour_max"])
             if cap is None or not 0 <= cap <= 100:

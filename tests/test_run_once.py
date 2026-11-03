@@ -55,7 +55,8 @@ class RunCase(unittest.TestCase):
     # -- fixtures -------------------------------------------------------------
     def write_cfg(self):
         raw = {"paths": {"home": self.home, "cursor_agent": gitfix.FAKE_CURSOR,
-                         "claude": gitfix.FAKE_CLAUDE, "check": gitfix.FAKE_CHECK}}
+                         "claude": gitfix.FAKE_CLAUDE, "check": gitfix.FAKE_CHECK},
+               "judge": {"mode": "off"}}
         if self.hygiene_cmds:
             raw["hygiene"] = {"commands": {"repo": self.hygiene_cmds}}
         with open(self.cfgpath, "w", encoding="utf-8") as fh:

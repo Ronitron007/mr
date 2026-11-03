@@ -2,7 +2,7 @@
 
 Precedence: safety floors > judge (when its bar passes) > caller hint > rules > default. A stricter
 answer needs ``raise_p``, a neutral one ``act_p``, a looser one ``act_p`` plus an evidence quote mr found
-in the task text. Nothing here is wired into the router yet."""
+in the task text. ``mr run`` and ``mr route`` apply the result (judge.run_intake)."""
 from __future__ import annotations
 
 import dataclasses

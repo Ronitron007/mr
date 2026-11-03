@@ -37,7 +37,7 @@ class DroidRunCase(LoopCase):
                          'check': gitfix.FAKE_CHECK, 'droid': self.fake()[0]},
                'hygiene': {'commands': {'repo': self.hygiene_cmds}},
                'acceptance': {'runners': {'repo': 'unittest'}},
-               'droid': {'enabled': True, 'recheck_s': 3600}}
+               'droid': {'enabled': True, 'recheck_s': 3600}, 'judge': {'mode': 'off'}}
         with open(self.cfgpath, 'w', encoding='utf-8') as fh:
             json.dump(raw, fh)
 

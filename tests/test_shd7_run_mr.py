@@ -74,7 +74,7 @@ class JudgeRunCase(RunCase):
         self.env['MR_HOME'] = self.home
 
     def write_cfg(self):
-        block = {'qset': 'route.v1', 'timeouts_ms': {'call': 600000, 'decision_point': 300000}}
+        block = {'mode': 'off', 'qset': 'route.v1', 'timeouts_ms': {'call': 600000, 'decision_point': 300000}}
         block.update(self.judge or {})
         raw = {'paths': {'home': self.home, 'cursor_agent': gitfix.FAKE_CURSOR, 'claude': gitfix.FAKE_CLAUDE,
                          'check': gitfix.FAKE_CHECK}, 'judge': block}
@@ -132,6 +132,8 @@ class JudgeRunTest(JudgeRunCase):
                 self.assertEqual(len(self.judge_calls()), 1)
                 continue
             self.assertEqual(judged, [], extra)
+            self.assertIs(route[0].get('judge_off_by_flag'), True if extra else None, extra)
+            route[0].pop('judge_off_by_flag', None)
             self.assertIsNone(route[0]['judge'], extra)
             self.assertIsNone(task[0]['shadow']['judge'], extra)
             self.assertEqual(self.judge_calls(), [], extra)
@@ -221,10 +223,10 @@ class JudgeRunTest(JudgeRunCase):
 
     def test_run_judge_on_runs_as_shadow(self):
         code, _, err = self.mr('--judge', 'on', text=UNSURE)
-        self.assertEqual(err.count(ON_LINE), 1, err)
-        self.assertNotIn('running as off', err)
+        self.assertNotIn(ON_LINE, err)
+        self.assertNotIn('not built', err)
         recs = self.records('judge')
-        self.assertEqual([(r['mode'], r['status']) for r in recs], [('shadow', 'ok')], err)
+        self.assertEqual([r['mode'] for r in recs], ['on'], err)
 
 
 class JudgeRouteTest(JudgeRunCase):

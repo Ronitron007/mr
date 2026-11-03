@@ -1,4 +1,4 @@
-"""Rules-only router (mr-spec §5.3, §9.2). Shadow judge and classifier answers are logged, never applied."""
+"""Rules router (mr-spec §5.3, §9.2). ``decide`` is rules only; the judge merge (mr.judge.merge) sits on top of it."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -106,17 +106,19 @@ def check_invariants(d: Decision, f: Features, task: Task, cfg: Config) -> None:
             raise InvariantError("I3")
 
 
-def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None, facts=None) -> dict:
+def _summary(d: Decision) -> dict:
+    return {"route": d.route, "type": d.type, "difficulty": d.difficulty, "risk": d.risk,
+            "risk_tags": sorted(d.risk_tags)}
+
+
+def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None, facts=None, rules_from=None,
+                 parts=None) -> dict:
     """§7.4 route record; pipeline.start appends it. ``judge``/``clf`` are shadow answers or None.
-    ``facts`` is a facts.Facts, or the exception its build raised; None leaves the facts keys out."""
-    rules = {
-        "route": d.route,
-        "type": d.type,
-        "difficulty": d.difficulty,
-        "risk": d.risk,
-        "risk_tags": sorted(d.risk_tags),
-    }
-    applied = dict(rules)
+    ``facts`` is a facts.Facts, or the exception its build raised; None leaves the facts keys out.
+    With the judge on, ``d`` is the merged decision, ``rules_from`` the rules decision and ``parts`` the plain-data
+    §9.1 keys (judge, hints, overrides, files, judge_absent, fallback, ...) to add."""
+    rules = _summary(rules_from or d)
+    applied = _summary(d)
     applied["ladder"] = list(d.ladder)
     rec = {
         "role": "route",
@@ -130,6 +132,7 @@ def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None, fac
         "sources": dict(d.sources),
         "invariant_violation": False,
     }
+    rec.update(parts or {})
     if facts is not None:
         rec["facts"], rec["risk_evidence"] = facts_mod.record_parts(facts)
     return rec

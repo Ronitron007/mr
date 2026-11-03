@@ -79,7 +79,8 @@ class _ShadowCase(RunCase):
 
     def write_cfg(self):
         raw = {'paths': {'home': self.home, 'cursor_agent': gitfix.FAKE_CURSOR,
-                         'claude': gitfix.FAKE_CLAUDE, 'check': gitfix.FAKE_CHECK}}
+                         'claude': gitfix.FAKE_CLAUDE, 'check': gitfix.FAKE_CHECK},
+               'judge': {'mode': 'off'}}
         if self.clf:
             raw['classifier'] = dict(self.clf)
         with open(self.cfgpath, 'w', encoding='utf-8') as fh:
@@ -293,7 +294,7 @@ class ShadowLoopTest(LoopCase):
                          'claude': gitfix.FAKE_CLAUDE, 'check': gitfix.FAKE_CHECK},
                'hygiene': {'commands': {'repo': self.hygiene_cmds}},
                'acceptance': {'runners': {'repo': 'unittest'}},
-               'classifier': {'sample_n': 1}}
+               'classifier': {'sample_n': 1}, 'judge': {'mode': 'off'}}
         with open(self.cfgpath, 'w', encoding='utf-8') as fh:
             json.dump(raw, fh)
 

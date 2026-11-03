@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import sys
 from dataclasses import dataclass
 
@@ -61,10 +62,10 @@ def should_run(params, prepass_confident: bool, fingerprint: str, sample_n: int 
 
 
 def judge_mode(cli: str | None, block: dict | None) -> str:
-    """The judge's mode for a route task: off when ``uses.route.enabled`` is false, else the effective mode."""
+    """The judge's mode for a route task: off when ``uses.route.enabled`` is false, else the CLI value or the config mode."""
     if (((block or {}).get("uses") or {}).get("route") or {}).get("enabled") is False:
         return "off"
-    return effective_mode(cli, block, "judge")
+    return cli or (block or {}).get("mode") or "off"
 
 
 def effective_mode(cli: str | None, block: dict | None, name: str = "classifier") -> str:
@@ -74,3 +75,22 @@ def effective_mode(cli: str | None, block: dict | None, name: str = "classifier"
         print(f"{name} on not built; running as shadow", file=sys.stderr)
         return "shadow"
     return mode
+
+
+def classify_fallback(cfg, task, features, log, off: bool):
+    """The judge fallback's one classifier call (a classifier.ClassifyResult), or None when it is skipped.
+
+    Skipped when ``off`` (--classifier off) or the cursor-agent command is not an executable file. Never raises."""
+    from mr import classifier  # lazy: classifier imports this module
+
+    path = cfg.paths.cursor_agent
+    if off or not path or not os.path.isfile(path) or not os.access(path, os.X_OK):
+        return None
+    ref = f"c-{task.id}-1"
+    try:
+        res = classifier.classify(task, features, cfg, ref=ref)
+    except Exception:
+        res = classifier.ClassifyResult(None, "cli_error", 1, None, classifier.prompt_sha(), ref, {},
+                                        (cfg.classifier or {}).get("model", ""))
+    log.append(classifier.record(res, task, "fallback", False))
+    return res

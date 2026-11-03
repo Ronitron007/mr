@@ -1,19 +1,24 @@
-"""Judge facade (mr-spec §5.5, §9.11): one shadow route call per ask, one judge record per call, cache hit or skip.
+"""Judge facade (mr-spec §5.5, §9.11): one route call per ask, one judge record per call, cache hit or skip.
 
-Shadow only: the answer is logged and handed back as a ShadowAnswer. Nothing here changes a routing decision.
+Shadow mode logs the answer and hands it back as a ShadowAnswer; nothing there changes a routing decision.
+Mode ``on`` (decide_route) is the synchronous intake call whose readings mr merges into the decision.
 """
 from __future__ import annotations
 
+import dataclasses
 import os
 import signal
 import subprocess
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, wait
+from dataclasses import dataclass
 
+from mr import guard, router, runners, shadow
 from mr import facts as facts_mod
-from mr import guard, runners, shadow
-from mr.judge import breaker, budget, cache, client, policy
+from mr.judge import breaker, budget, cache, client
+from mr.judge import merge as merge_mod
+from mr.judge import policy
 from mr.judge import prompt as prompt_mod
 from mr.judge import questions as qmod
 from mr.judge import state as state_mod
@@ -23,6 +28,9 @@ USE = "route"
 QSET = "route.v1"
 QSET_V2 = "route.v2"
 _NO_CALL = frozenset({"guard_yield", "cli_unavailable"})  # the client reports these without running claude
+_USABLE = frozenset({"ok", "ok_partial", "cache_hit"})
+_FIELDS = ("type", "difficulty", "route", "risk")
+_TASK_CALLS_ON = 3  # spec §3.7
 
 
 def _scale() -> float:
@@ -48,12 +56,21 @@ def _scope_level(features) -> int:
     return 0 if n <= 1 else 1 if n <= 3 else 2 if n <= 6 else 3 if n <= 12 else 4
 
 
+@dataclass(frozen=True)
+class JudgeOutcome:
+    status: str
+    readings: dict | None
+    ref: str
+    latency_ms: int | None
+    source: str  # "judge" | "cache"
+
+
 class Judge:
     def __init__(self, cfg, mode: str, log, *, task_id: str, exec_fn=None):
         if mode not in ("shadow", "on"):
             raise ValueError(f"judge mode {mode!r}: expected shadow or on")
         self.cfg, self.log, self.task_id, self._exec = cfg, log, task_id, exec_fn
-        self.mode = "shadow"  # "on" is not built: it runs as shadow
+        self.mode = mode
         self._block = cfg.judge or {}
         self._qset = self._block.get("qset", QSET_V2)
         self._v2 = self._qset == QSET_V2
@@ -87,6 +104,37 @@ class Judge:
         self._recs[ref] = self._blank(ref, consulted)
         self._finish(ref, status, None, bare=False)
         return ref
+
+    def decide_route(self, task, features, facts, rules_decision) -> JudgeOutcome:
+        """Mode on: one synchronous route call (or a cache hit). Never raises, sleeps or waits for headroom.
+
+        The record is written later by note_applied, once the merge knows what it took from the judge.
+        ``rules_decision`` is part of the call contract; the judge's state is built from ``features``.
+        """
+        ref = self._next_ref()
+        rec = self._recs[ref] = self._blank(ref, True)
+        start = time.monotonic()
+        status = "cli_error"
+        try:
+            _answer, status = self._steps(ref, rec, task, features, True, facts)
+        except Exception:
+            pass
+        rec["status"] = status
+        usable = status in _USABLE
+        latency = rec["latency_ms"]
+        if not isinstance(latency, int):
+            latency = int((time.monotonic() - start) * 1000)
+        return JudgeOutcome(status, rec["decisions"] if usable else None, ref, latency,
+                            "cache" if status == "cache_hit" else "judge")
+
+    def note_applied(self, ref: str, applied, overrides, status: str | None = None) -> None:
+        """Write the one record of a decide_route call: the fields the merge took from the judge and its overrides."""
+        rec = dict(self._recs[ref])
+        rec["applied"] = list(applied)
+        rec["overrides"] = [dataclasses.asdict(o) if dataclasses.is_dataclass(o) else dict(o) for o in overrides]
+        if status is not None:
+            rec["status"] = status
+        self.log.append(rec)
 
     def join_shadow(self, timeout_s: float) -> None:
         """Wait for the calls. Each one still running is logged as timeout and its child process group is killed."""
@@ -155,7 +203,9 @@ class Judge:
         if hit is not None:
             parsed, rec["model_served"] = hit
             return self._read(ref, rec, parsed, rules, "cache_hit", consulted), "cache_hit"
-        allowed, reason, after = budget.charge(cfg, self.task_id, self.mode)
+        caps = {"per_task": (block.get("budget") or {}).get("max_calls_per_task_on", _TASK_CALLS_ON)} \
+            if self.mode == "on" else {}
+        allowed, reason, after = budget.charge(cfg, self.task_id, self.mode, **caps)
         rec["budget_after"] = after
         if not allowed:
             return None, reason
@@ -206,6 +256,8 @@ class Judge:
         read = policy.read_route_v2 if self._v2 else policy.read_route
         decisions = read(parsed, rules, self.cfg)
         rec.update(answers=parsed.answers, decisions=decisions)
+        if self.mode == "on":
+            return None
         return policy.to_shadow(parsed, decisions, ref=ref, status=status, consulted=consulted,
                                 latency_ms=rec["latency_ms"])
 
@@ -286,3 +338,91 @@ class Judge:
                 runners._children.discard(pgid)
             return proc.returncode, _text(out), _text(err), time.monotonic() - start, timed_out
         return run
+
+
+# --- the intake: judge, fallback chain, merge (spec §3.6) ---------------------------------------------
+
+@dataclass
+class Intake:
+    """What `mr run` and `mr route` take from one intake: the merged decision and the parts of the route record."""
+    decision: router.Decision
+    outcome: JudgeOutcome
+    overrides: tuple
+    files: dict  # counts by src
+    judge_absent: bool
+    fallback: str | None
+    invariant: bool
+    judge: dict
+    clf: object = None  # the fallback's classifier.ClassifyResult, when it made a call
+
+    def route_parts(self, hints: dict) -> dict:
+        return {
+            "judge": dict(self.judge), "hints": dict(hints),
+            "overrides": [dataclasses.asdict(o) for o in self.overrides], "files": dict(self.files),
+            "judge_absent": self.judge_absent, "fallback": self.fallback, "invariant_violation": self.invariant,
+        }
+
+
+def override_line(o) -> str:
+    conf = "-" if o.judge_conf is None else o.judge_conf
+    quote = " ".join((o.evidence or "").split())
+    return f'judge override: {o.field} {o.hint} -> {o.applied} (conf {conf}, "{quote}")'
+
+
+def _clf_readings(out) -> dict | None:
+    """Judge-shaped readings from a classifier answer; the merge treats them as stricter-only."""
+    def reading(value) -> dict:
+        return {"value": value, "conf": out.confidence, "evidence": None, "quote_found": False}
+
+    try:
+        return {"task_type": reading(out.task_type), "difficulty": reading(router._DIFF.index(out.difficulty)),
+                "risk": reading(router._RISK.index(out.risk)), "load_bearing": reading(out.load_bearing),
+                "needs_review": reading(out.needs_review)}
+    except ValueError:
+        return None
+
+
+def _applied(decision: router.Decision) -> list[str]:
+    fields = [f for f in _FIELDS if decision.sources.get(f) == "judge"]
+    if any(e.get("src") == "judge" for k in ("change", "new") for e in decision.files.get(k, ())):
+        fields.append("files")
+    if decision.risk_evidence:
+        fields.append("risk_tags")
+    return fields
+
+
+def files_by_src(files: dict) -> dict:
+    counts: dict[str, int] = {}
+    for key in ("change", "new"):
+        for entry in files.get(key, ()):
+            counts[entry["src"]] = counts.get(entry["src"], 0) + 1
+    return counts
+
+
+def run_intake(cfg, task, features, facts, rules: router.Decision, log, *, classifier_off: bool = False,
+               exec_fn=None) -> Intake:
+    """Ask the judge once, fall back (cache, one classifier call, rules) when it cannot answer, then merge.
+
+    Never raises for a judge failure; the one judge record is written here, after the merge."""
+    judge = Judge(cfg, "on", log, task_id=task.id, exec_fn=exec_fn)
+    outcome = judge.decide_route(task, features, facts, rules)
+    clf = None
+    if outcome.status in _USABLE:
+        readings, source = outcome.readings, "judge"
+    else:
+        clf = shadow.classify_fallback(cfg, task, features, log, classifier_off)
+        usable = clf is not None and clf.status in ("ok", "cache_hit") and clf.out is not None
+        readings, source = (_clf_readings(clf.out) if usable else None), "classifier"
+    try:
+        merged = merge_mod.merge(task, facts, rules, readings, cfg, source=source)
+    except router.InvariantError:
+        merged = None
+    summary = {"status": outcome.status, "backend": BACKEND, "latency_ms": outcome.latency_ms,
+               "qset": judge._qset, "ref": outcome.ref}
+    if merged is None:
+        judge.note_applied(outcome.ref, [], (), status="invariant_violation")
+        return Intake(rules, outcome, (), {}, True, "rules", True, summary, clf)
+    judge.note_applied(outcome.ref, _applied(merged.decision) if source == "judge" else [], merged.overrides)
+    fallback = "cache" if source == "judge" and outcome.status == "cache_hit" else merged.fallback
+    return Intake(merged.decision, outcome, merged.overrides, files_by_src(merged.decision.files),
+                  merged.judge_absent, fallback, False, summary, clf)

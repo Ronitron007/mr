@@ -1,4 +1,4 @@
-"""`mr route`: rules-only dry run. Writes nothing (mr-spec §2.1, §2.3)."""
+"""`mr route`: dry run of the routing (rules, plus the intake judge when it is on). Writes nothing (mr-spec §2.1, §2.3)."""
 from __future__ import annotations
 
 import json
@@ -10,30 +10,38 @@ from mr import classifier, facts, shadow
 from mr import exitcodes as ec
 from mr.config import ConfigError, load
 from mr.gitmeta import read_head
-from mr.judge import Judge
+from mr.judge import Judge, judge as judge_mod
 from mr.prepass import extract
 from mr.router import Decision, RouteError, decide
-from mr.task import Params, TaskError, make_task
+from mr.task import Params, TaskError, load_task, make_task
 
 _DESIGN = "design route not built; re-run with --route cascade or plan by hand"
 
 
 def run(args) -> int:
     text = getattr(args, "task", None)
-    if not isinstance(text, str) or text.strip() == "":
+    task_file = getattr(args, "task_file", None)
+    if (not isinstance(text, str) or text.strip() == "") and not task_file:
         print("task text missing", file=sys.stderr)
         return ec.USAGE
     models = not getattr(args, "no_models", False)
     try:
         cfg = load(getattr(args, "config", None))
         repo = os.path.abspath(getattr(args, "repo", None) or os.getcwd())
-        task = make_task(text, repo, read_head(repo), _params(args))
+        if isinstance(text, str) and text.strip() != "":
+            task = make_task(text, repo, read_head(repo), _params(args))
+        else:
+            task = load_task(None, task_file, _params(args), repo, home=cfg.paths.home)
+        repo = task.repo
         features = extract(task, None)
         decision = decide(task, features, cfg)
-        mode = shadow.effective_mode(getattr(args, "classifier", None), cfg.classifier or {}) if models else "off"
-        clf = _shadow_classifier(args, cfg, task, features, mode)
         jmode = shadow.judge_mode(getattr(args, "judge", None), cfg.judge or {}) if models else "off"
+        mode = shadow.effective_mode(getattr(args, "classifier", None), cfg.classifier or {}) if models else "off"
+        if jmode == "on":
+            mode = "off"  # the judge's fallback is the only classifier call
+        clf = _shadow_classifier(args, cfg, task, features, mode)
         found = facts.try_build(task.text, repo, task.files_named)
+        intake = _intake(args, cfg, task, features, decision, found) if jmode == "on" else None
         jdg = _shadow_judge(args, cfg, task, features, jmode, found)
     except (TaskError, RouteError) as exc:
         print(str(exc), file=sys.stderr)
@@ -41,9 +49,16 @@ def run(args) -> int:
     except ConfigError as exc:
         print(f"config error: {exc}", file=sys.stderr)
         return ec.USAGE
+    if intake is not None:
+        decision = intake.decision
+        for o in intake.overrides:
+            print(judge_mod.override_line(o), file=sys.stderr)
     code = _exit_code(decision)
     if getattr(args, "json", False):
         payload = _payload(task, features, decision, code)
+        if intake is not None:
+            payload["judge"] = dict(intake.judge)
+            payload["overrides"] = [asdict(o) for o in intake.overrides]
         payload["facts"], payload["risk_evidence"] = facts.record_parts(found)
         if mode == "shadow":
             payload["classifier_shadow"] = shadow.route_summary(clf)
@@ -53,11 +68,24 @@ def run(args) -> int:
     else:
         print(_explain(task, decision, features))
         print(_facts_line(found))
+        if intake is not None:
+            print(_intake_line(intake))
         if clf is not None:
             print(_clf_line(clf))
         if jdg is not None:
             print(_judge_line(jdg))
     return code
+
+
+def _intake(args, cfg, task, features, rules, found):
+    """The merged decision's intake: the judge's call, the fallback and the merge. The records are dropped."""
+    usable = found if isinstance(found, facts.Facts) else facts.Facts((), {}, (), (), (), {}, 0)
+    return judge_mod.run_intake(cfg, task, features, usable, rules, _NoLog(),
+                                classifier_off=getattr(args, "classifier", None) == "off")
+
+
+def _intake_line(intake) -> str:
+    return f"judge: status={intake.judge['status']} fallback={intake.fallback or '-'} overrides={len(intake.overrides)}"
 
 
 def _facts_line(found) -> str:

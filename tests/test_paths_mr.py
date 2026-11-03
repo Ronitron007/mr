@@ -102,7 +102,7 @@ class TestPortableConfig(unittest.TestCase):
         self.assertEqual(raw['rungs']['S']['effort'], 'high')
         self.assertEqual(raw['caps']['opus_rungs_per_task'], 1)
         self.assertEqual(raw['advisor']['mode'], 'on')
-        self.assertEqual(raw['judge']['mode'], 'off')
+        self.assertEqual(raw['judge']['mode'], 'on')
         self.assertEqual(raw['judge']['backend'], 'haiku')
         self.assertIn('judge:max:claude-haiku-5-5', raw['allowed'])
         self.assertEqual(raw['fallback_claude_denied'], ['G-x'])

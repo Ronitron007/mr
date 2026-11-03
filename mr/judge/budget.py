@@ -87,10 +87,14 @@ def _stamps(ledger: dict) -> list[float]:
     return [_parse(item) for item in ledger["recent"]]
 
 
-def charge(cfg, task_id: str, mode: str, now: float | None = None) -> tuple[bool, str | None, dict]:
-    """Count one judge call, or deny it. Returns (allowed, reason, budget_after)."""
+def charge(cfg, task_id: str, mode: str, now: float | None = None, *,
+           per_task: int | None = None) -> tuple[bool, str | None, dict]:
+    """Count one judge call, or deny it. Returns (allowed, reason, budget_after).
+
+    ``per_task`` replaces judge.budget.max_calls_per_task for this call (mode on passes its own cap)."""
     now = time.time() if now is None else now
-    per_hour, per_day, per_task = _limits(cfg)
+    per_hour, per_day, cfg_task = _limits(cfg)
+    per_task = cfg_task if per_task is None else per_task
     factor = SHADOW_FACTOR if mode == "shadow" else 1.0
     at = datetime.fromtimestamp(now, IST)
     today = at.date().isoformat()

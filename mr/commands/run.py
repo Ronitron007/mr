@@ -20,7 +20,7 @@ from concurrent.futures import TimeoutError as FutureTimeout
 from mr import exitcodes as ec
 from mr import (classifier, config, facts, hygiene, isolation, loop, patches, pipeline, prepass, redact, router,
                 runners, scope, shadow, skillsync, state)
-from mr.judge import Judge
+from mr.judge import Judge, judge as judge_mod
 from mr.log import Log, now_ist
 from mr.task import Params, TaskError, load_task, normalise
 
@@ -47,6 +47,9 @@ class _Ctx:
 
     def __init__(self, args, cfg, task, feats, decision, ladder: list[str], t0: float, started_at: str):
         self.args, self.cfg, self.task, self.feats, self.d = args, cfg, task, feats, decision
+        self.rules = decision  # the rules decision; self.d is the merged one when the judge is on
+        self.intake = None  # judge.Intake when the judge is on for this task
+        self.route_parts: dict | None = None  # extra route-record keys (plain data)
         self.ladder = ladder
         self.rung = self.cur = ladder[0] if ladder else ""  # first rung; cur = the rung now running
         self.t0, self.started_at = t0, started_at
@@ -260,16 +263,22 @@ def run(args) -> int:
         task = load_task(args.task, args.task_file, _params(args), args.repo or os.getcwd(),
                          home=cfg.paths.home)
         feats = prepass.extract(task, task.repo)
-        decision = router.decide(task, feats, cfg)
+        rules = decision = router.decide(task, feats, cfg)
     except (TaskError, router.RouteError) as exc:
         _say(str(exc))
         return ec.USAGE
+    found = facts.try_build(task.text, task.repo, task.files_named)
+    intake, parts = _intake(args, cfg, task, feats, rules, found)
+    if intake is not None:
+        decision = intake.decision
     if args.once:
         ladder = [args.rung]
     else:  # --rung X without --once puts X first, like --prefer
         ladder = ([args.rung] if args.rung else []) + [r for r in decision.ladder if r != args.rung]
     c = _Ctx(args, cfg, task, feats, decision, ladder, t0, started_at)
-    c.facts = facts.try_build(task.text, task.repo, task.files_named)
+    c.facts, c.rules, c.intake, c.route_parts = found, rules, intake, parts
+    if intake is not None and intake.clf is not None:
+        c.n_clf = intake.clf.calls
     _start_classifier(c)
     _start_judge(c)
     old = _install_handlers(c)
@@ -303,6 +312,24 @@ def run(args) -> int:
     return c.exit
 
 
+def _intake(args, cfg, task, feats, rules, found):
+    """(judge.Intake or None, extra route-record keys). With the judge on this asks it once and merges."""
+    flag = getattr(args, "judge", None)
+    if flag == "off":
+        _say("judge off by flag (debug)")
+        return None, {"judge_off_by_flag": True}
+    if shadow.judge_mode(flag, cfg.judge or {}) != "on":
+        return None, None
+    usable = found if isinstance(found, facts.Facts) else facts.Facts((), {}, (), (), (), {}, 0)
+    intake = judge_mod.run_intake(cfg, task, feats, usable, rules, Log(cfg.paths.home),
+                                  classifier_off=getattr(args, "classifier", None) == "off")
+    for o in intake.overrides:
+        _say(judge_mod.override_line(o))
+    hints = {k: v for k, v in (("type", task.params.type), ("difficulty", task.params.difficulty),
+                               ("route", task.params.route)) if v is not None}
+    return intake, intake.route_parts(hints)
+
+
 def _clf_result(c: _Ctx, status: str, calls: int):
     return classifier.ClassifyResult(None, status, calls, None, classifier.prompt_sha(), c.clf_ref, {},
                                      (c.cfg.classifier or {}).get("model", ""))
@@ -310,6 +337,8 @@ def _clf_result(c: _Ctx, status: str, calls: int):
 
 def _start_classifier(c: _Ctx) -> None:
     """Shadow classifier: decide whether it runs and start it in a background thread. It never acts."""
+    if getattr(c, "intake", None) is not None:  # the judge is on: only its fallback may call the classifier
+        return
     block = c.cfg.classifier or {}
     if shadow.effective_mode(getattr(c.args, "classifier", None), block) != "shadow":
         return
@@ -496,6 +525,12 @@ def _feature_hash(feats) -> str | None:
     return hashlib.sha256(json.dumps(doc, sort_keys=True).encode()).hexdigest()[:16]
 
 
+def _intake_counts(c: _Ctx) -> dict:
+    if getattr(c, "intake", None) is None:
+        return {}
+    return {"judge_overrides": len(c.intake.overrides), "files_src": dict(c.intake.files)}
+
+
 def _task_record(c: _Ctx, ended: str) -> dict:
     d, task, last = c.d, c.task, (c.rungs[-1] if c.rungs else None)
     esc = {k: sum(r["class"] == k for r in c.rungs) for k in ("skipped", "tried_wrong", "spec_suspect", "off_track")}
@@ -528,6 +563,7 @@ def _task_record(c: _Ctx, ended: str) -> dict:
         "commit": c.commit[:12] if c.commit else None,
         "raw_dir": os.path.join(c.cfg.paths.home, "raw", task.id) + "/",
         "label": {"state": "provisional"}, "unknown": [],
+        **_intake_counts(c),
     }
 
 

@@ -63,7 +63,7 @@ advisor: {mode: "on", rows_off: [], injection: adv.v2, max_consults: 1, reserve_
 classifier: {model: grok-4.7-low, mode: off, timeout_s: 30, min_conf: 0.6, cache_days: 7, sample_n: 3, join_timeout_s: 75}   # optional block; deferred (§0.2)
 
 judge:
-  mode: "off"                     # off | shadow | on. Optional block; `off` until Phase 2 builds the judge, then `shadow`
+  mode: "on"                      # off | shadow | on. `on` = the intake judge decides (Owner default); `--judge off` is a debug flag
   backend: haiku                  # the only default ("for now"); comparison backends below are off
   qset: route.v2                  # route.v1 | route.v2: the question set the shadow judge asks (v2 adds files and tag evidence)
   egress: excerpts                # off | metadata | excerpts   (§12.2; D2 closed: same vendor as the Claude rungs)
@@ -91,7 +91,7 @@ judge:
   timeouts_ms: {call: 12000, decision_point: 15000, comparison: 15000}   # judge runs only at task boundaries
   state_limits_tokens: {route: 16000, spec: 16000, postrun: 16000, conformance_diff: 8000}
   token_estimate_bytes_per_token: 3.0
-  budget: {calls_per_hour: null, calls_per_day: 150, max_calls_per_task: 6,    # §9.10; null = no hourly cap
+  budget: {calls_per_hour: null, calls_per_day: 150, max_calls_per_task: 6, max_calls_per_task_on: 3,   # §9.10; null = no hourly cap; _on = mode on (§3.7)
            est_pts_per_call: 0.2, shadow_five_hour_max: 80}                    # shadow calls stop at this five_hour_pct
   cache: {route_ttl_days: 7, spec_ttl_days: 30, postrun_ttl_days: 30}
   breaker: {consecutive_failures: 3, open_minutes: 15}
