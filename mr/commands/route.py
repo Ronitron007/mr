@@ -136,6 +136,7 @@ def _params(args) -> Params:
         classifier=getattr(args, "classifier", None),
         yes=bool(getattr(args, "yes", False)),
         wait_lock_s=getattr(args, "wait_lock_s", 600),
+        pin=tuple(getattr(args, "pin", None) or ()),
     )
 
 

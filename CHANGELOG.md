@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal: the rules that merge the judge's answers with safety floors, caller hints and the rules-only decision (stricter answers at 0.60, neutral at 0.75, looser only with a quote found in the task text), plus a repeatable `--pin FIELD` flag on `mr run` and `mr route` (and `params.pin` in a task file) to keep your value for a field. Not active yet: no decision changes.
+
 - New optional droid backend (`droid:` config block, off by default). With `droid.enabled: true` and your Anthropic key in `ANTHROPIC_API_KEY`, the Sonnet rungs `S` and `S+` run on the Factory `droid` CLI first (Sonnet only, billed to your API key, outside the Claude usage gate). When droid reports no credits or a bad key, mr restores the tree and runs the same attempt on the `claude` CLI, and keeps using it until `droid.recheck_s` has passed; the key never reaches `claude` or `cursor-agent` children. New `mr droid check [--probe]` and `mr droid reset`.
 
 - The shadow judge now asks question set `route.v2` by default (`judge.qset`, `route.v1` or `route.v2`): it also answers which files the change edits and creates, whether the candidate list is complete, and quotes the words that make a risk tag apply. The answers are logged only; no routing decision changes.

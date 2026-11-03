@@ -125,6 +125,7 @@ def _params(args) -> Params:
         experiment=bool(getattr(args, "experiment", False)),
         judge=getattr(args, "judge", None), classifier=getattr(args, "classifier", None),
         yes=bool(getattr(args, "yes", False)), wait_lock_s=getattr(args, "wait_lock_s", 600),
+        pin=tuple(getattr(args, "pin", None) or ()),
     )
 
 

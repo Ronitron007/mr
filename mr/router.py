@@ -1,7 +1,7 @@
 """Rules-only router (mr-spec §5.3, §9.2). Shadow judge and classifier answers are logged, never applied."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from mr import facts as facts_mod
 from mr import shadow
@@ -39,6 +39,9 @@ class Decision:
     ladder: tuple[str, ...]
     reasons: tuple[str, ...]
     sources: dict[str, str]
+    files: dict = field(default_factory=dict)
+    risk_evidence: tuple = ()
+    judge_status: str | None = None
 
 
 def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None) -> Decision:
@@ -59,18 +62,8 @@ def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None) -> Decisi
         route, route_src = "design", "rule"
     else:
         route, route_src = "cascade", "default"
-    ladder, ladder_src = _select_ladder(route, kind, difficulty, cfg, reasons)
-    ladder = _apply_prefer(ladder, task.params.prefer)
-    before = ladder
-    ladder = _apply_budget(ladder, cfg, task.params.budget, reasons)
-    if route != "design" and before and not ladder:
-        reasons.append("empty_ladder_after_budget")
-    rank = _DIFF.index(difficulty)
-    needs_review = (
-        (kind in _REVIEW_AT and rank >= _DIFF.index("medium"))
-        or kind == "refactor"
-        or bool(cfg.review_required.get(f"{kind}_{difficulty}", False))
-    )
+    ladder, ladder_src = build_ladder(route, kind, difficulty, cfg, task.params, reasons)
+    needs_review = review_rule(kind, difficulty, cfg)
     decision = Decision(
         route=route,
         type=kind,
@@ -140,6 +133,25 @@ def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None, fac
     if facts is not None:
         rec["facts"], rec["risk_evidence"] = facts_mod.record_parts(facts)
     return rec
+
+
+def build_ladder(route, kind, difficulty, cfg, params, reasons) -> tuple[tuple[str, ...], str]:
+    """Select the ladder for a route and cell, then apply ``params.prefer`` and ``params.budget``."""
+    ladder, ladder_src = _select_ladder(route, kind, difficulty, cfg, reasons)
+    ladder = _apply_prefer(ladder, params.prefer)
+    before = ladder
+    ladder = _apply_budget(ladder, cfg, params.budget, reasons)
+    if route != "design" and before and not ladder:
+        reasons.append("empty_ladder_after_budget")
+    return ladder, ladder_src
+
+
+def review_rule(kind: str, difficulty: str, cfg: Config) -> bool:
+    return bool(
+        (kind in _REVIEW_AT and _DIFF.index(difficulty) >= _DIFF.index("medium"))
+        or kind == "refactor"
+        or cfg.review_required.get(f"{kind}_{difficulty}", False)
+    )
 
 
 def _resolve_type(task: Task, f: Features) -> tuple[str, str]:

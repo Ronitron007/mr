@@ -14,6 +14,7 @@ from mr.paths import data_dir
 
 _TEXT_LIMIT = 8000
 _TRAIL_PUNCT = ".,;:!?"
+PIN_FIELDS = ("type", "difficulty", "route", "risk", "risk_tags", "load_bearing", "needs_review", "files")
 
 
 class TaskError(Exception):
@@ -35,6 +36,7 @@ class Params:
     classifier: str | None = None
     yes: bool = False
     wait_lock_s: int = 600
+    pin: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -101,7 +103,18 @@ def _merge_params(cli: Params, raw: object) -> Params:
         current = getattr(cli, field.name)
         if current is None or current == getattr(defaults, field.name):
             updates[field.name] = raw[field.name]
+    if "pin" in updates:
+        updates["pin"] = _pin(updates["pin"])
     return replace(cli, **updates) if updates else cli
+
+
+def _pin(raw: object) -> tuple[str, ...]:
+    if not isinstance(raw, (list, tuple)) or not all(isinstance(name, str) for name in raw):
+        raise TaskError("task file params.pin must be a list of field names")
+    bad = [name for name in raw if name not in PIN_FIELDS]
+    if bad:
+        raise TaskError(f"task file params.pin: unknown field {bad[0]!r} (use {', '.join(PIN_FIELDS)})")
+    return tuple(raw)
 
 
 def _git_out(repo: str, *args: str) -> str:

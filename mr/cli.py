@@ -11,6 +11,7 @@ import traceback
 
 from mr import exitcodes as ec
 from mr.config import ConfigError
+from mr.task import PIN_FIELDS
 
 _DEFERRED = frozenset({"plan", "spec", "judge", "mark"})
 _TYPE = ("code", "bugfix", "refactor", "test", "ios-native", "ui", "review", "plan", "explain", "docs")
@@ -70,6 +71,7 @@ def _run_flags(p: argparse.ArgumentParser) -> None:
     p.add_argument("--prefer", type=_prefer)
     p.add_argument("--budget", choices=_BUDGET, default="normal")
     p.add_argument("--latency", choices=_LAT)
+    p.add_argument("--pin", action="append", choices=PIN_FIELDS, help="keep your value for this field; repeatable")
     p.add_argument("--judge", choices=_JUDGE)
     p.add_argument("--classifier", choices=_CLASS)
     p.add_argument("--experiment", action="store_true")
