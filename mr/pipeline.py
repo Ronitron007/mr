@@ -3,16 +3,32 @@ from __future__ import annotations
 
 import os
 import subprocess
+import sys
 
 from mr import exitcodes as ec
 from mr import isolation, router, state
 
 DESIGN = "design route not built; re-run with --route cascade or plan by hand"
 NO_FILES = "no files named: keep the change minimal and inside the repo"
+NO_INSTALL = "Do not install, add or upgrade packages or dependencies; edit the files in scope only."
+HUMAN_GO = "migrations need a human go before any migration command runs"
 
 
 def git(repo: str, *argv: str, env: dict | None = None) -> subprocess.CompletedProcess:
     return subprocess.run(["git", *argv], cwd=repo, env=env, capture_output=True, text=True, check=False)
+
+
+def _inputs(c, tags, other_writer: bool):
+    d = c.d
+    return isolation.compute_inputs(
+        c.task.repo, ro=False, risk=d.risk, difficulty=d.difficulty, risk_tags=d.risk_tags,
+        experiment=bool(c.args.experiment), other_writer=other_writer, cfg=c.cfg,
+        est_files=len(c.task.files_named), path_tags=tags)
+
+
+def deps_line(c) -> str:
+    """The extra implementer prompt line for a dependency change, or an empty string."""
+    return "\n" + NO_INSTALL if "deps" in getattr(c, "path_tags", ()) else ""
 
 
 def start(c) -> int | None:
@@ -20,12 +36,24 @@ def start(c) -> int | None:
 
     Returns an exit code when the task stopped here (c.stop already called), else None.
     """
-    a, cfg, task, d = c.args, c.cfg, c.task, c.d
+    a, cfg, task = c.args, c.cfg, c.task
     home, repo = cfg.paths.home, task.repo
-    c.log.append(router.route_record(task, c.feats, d, judge=getattr(c, "shadow_judge", None),
-                                     clf=getattr(c, "shadow_clf", None),
-                                     facts=getattr(c, "facts", None), rules_from=getattr(c, "rules", None),
-                                     parts=getattr(c, "route_parts", None)))
+    tags = c.path_tags = router.path_tags(c.feats, getattr(c, "facts", None))
+    inputs = _inputs(c, tags, False)
+    c.high_risk = inputs.HIGH_RISK
+    if c.high_risk:
+        c.d = router.require_strong(c.d)
+    d = c.d
+    rec = router.route_record(task, c.feats, d, judge=getattr(c, "shadow_judge", None),
+                              clf=getattr(c, "shadow_clf", None),
+                              facts=getattr(c, "facts", None), rules_from=getattr(c, "rules", None),
+                              parts=getattr(c, "route_parts", None))
+    rec.update(design_mapped_to_cascade=router.MAPPED in d.reasons, required_review=d.required_review,
+               isolation_inputs={"HIGH_RISK": inputs.HIGH_RISK, "DEPS": inputs.DEPS,
+                                 "NEEDS_BRANCH": inputs.NEEDS_BRANCH, "from_tags": sorted(tags)})
+    c.log.append(rec)
+    if "migration" in tags:
+        print(HUMAN_GO, file=sys.stderr)
     if d.route == "design" and a.route is None:
         return c.stop(ec.HUMAN, DESIGN)
 
@@ -38,14 +66,12 @@ def start(c) -> int | None:
             f"see its patches in {os.path.join(home, 'patches', str(e.task))} and "
             f"{os.path.join(home, 'tasks', str(e.task), 'state.json')}; "
             "check the tree, then empty the lock file (mr unlock is L1)"))
-    inputs = isolation.compute_inputs(
-        repo, ro=False, risk=d.risk, difficulty=d.difficulty, risk_tags=d.risk_tags,
-        experiment=bool(a.experiment), other_writer=not got, cfg=cfg, est_files=len(task.files_named))
+    inputs = _inputs(c, tags, not got)
     if inputs.DIRTY_FOREIGN:
         left = state.find_w7_leftover(home, repo)
         if left:
             return c.stop(ec.UNSAFE_GIT, f"commit or discard {left.get('task')}'s changes first")
-    c.iso = isolation.decide_isolation(inputs)
+    c.iso = isolation.decide_isolation(inputs, (getattr(cfg, "risk", None) or {}).get("high_isolation", "W5"))
     why = isolation.unsupported_reason(c.iso)
     if why:
         return c.stop(ec.UNSAFE_GIT, why)

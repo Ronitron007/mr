@@ -6,6 +6,7 @@ import os
 from dataclasses import dataclass
 
 from mr import config, runners
+from mr.router import STRENGTH
 
 _PATCH_CAP = 60_000
 _NO_CHECKLIST = ("No checklist: judge whether the patch correctly and minimally "
@@ -27,13 +28,19 @@ def _cross_family(author_family: str, rung: str, cfg) -> bool:
     return reviewer != author_family and {author_family, reviewer} != {"kimi", "composer"}
 
 
-def reviewer_rung(author_family: str, risk: str, cfg) -> str:
-    """AC-SIG-2: reviewer family != author family, never kimi<->composer."""
+def reviewer_rung(author_family: str, risk: str, cfg, required: str | None = None) -> str:
+    """AC-SIG-2: reviewer family != author family, never kimi<->composer.
+
+    ``required`` is a Claude rung the review must reach at least (S < S+ < O < O+). A mapped Claude reviewer
+    at least that strong stays; otherwise ``required`` reviews, even in the author's own family.
+    """
     if author_family == "grok" and risk == "high":
         rung = cfg.review.high_risk_grok
     else:
         rung = cfg.review.map[author_family]
     assert _cross_family(author_family, rung, cfg), f"reviewer {rung} breaks AC-SIG-2 for {author_family}"
+    if required and not (rung in STRENGTH and STRENGTH.index(rung) >= STRENGTH.index(required)):
+        return required
     return rung
 
 
@@ -65,6 +72,7 @@ class SignalC:
     warning: str | None
     denied: bool
     spend: tuple = ()  # (RunResult, GuardedRun) per executed Claude reviewer call
+    deferred: bool = False  # the guard denied the required strong review and there is no fallback
 
 
 def _prompt(patch: str, requirements: list[dict] | None, item: str | None,
@@ -79,12 +87,15 @@ def _prompt(patch: str, requirements: list[dict] | None, item: str | None,
 
 
 def review(patch: str, requirements: list[dict] | None, item: str | None,
-           author_model: str, risk: str, *, cfg, tree, task_id, attempt) -> SignalC:
+           author_model: str, risk: str, *, cfg, tree, task_id, attempt,
+           required: str | None = None, defer: bool = False) -> SignalC:
+    """``required`` is the weakest Claude reviewer allowed. With ``defer`` a guard deny of that reviewer does
+    not fall back to review.claude_denied: the result is ``deferred``."""
     author = family(author_model)
-    rung = reviewer_rung(author, risk, cfg)
+    rung = reviewer_rung(author, risk, cfg, required)
     prompt = _prompt(patch, requirements, item, task_id)
     timeout = cfg.timeouts.reviewer_s
-    doc, attempts, denied, warning = None, 0, False, None
+    doc, attempts, denied, deferred, warning = None, 0, False, False, None
     spend: list = []
     while attempts < 2:
         r = cfg.rungs[rung]
@@ -101,6 +112,9 @@ def review(patch: str, requirements: list[dict] | None, item: str | None,
                 spend.append((res, guarded))
             if res is None or guarded.wrapper_denied:
                 denied = True
+                if defer:
+                    deferred = True
+                    break
                 fallback = cfg.review.claude_denied
                 if not _cross_family(author, fallback, cfg):  # AC-SIG-2 beats a misconfigured fallback
                     warning = f"reviewer {rung} denied and review.claude_denied {fallback} is not cross-family"
@@ -113,8 +127,8 @@ def review(patch: str, requirements: list[dict] | None, item: str | None,
             break
     verdict = doc["overall"] if doc else "unclear"
     ok = verdict == "pass"
-    if verdict == "unclear" and risk == "low":
+    if verdict == "unclear" and risk == "low" and not deferred:
         ok, warning = True, "reviewer unclear; accepted at low risk"
     return SignalC(verdict=verdict, ok=ok, items=tuple(doc["items"]) if doc else (),
                    reviewer=rung, attempts=attempts, warning=warning, denied=denied,
-                   spend=tuple(spend))
+                   spend=tuple(spend), deferred=deferred)

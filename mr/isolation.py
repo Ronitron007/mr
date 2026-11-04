@@ -19,7 +19,7 @@ _WHY = {
     "W3": "experiment",
     "W4": "high risk or dependency change",
 }
-_HIGH_TAGS = {"deps", "migration", "native-config"}
+_HIGH_TAGS = frozenset({"auth", "payments", "migration", "data-deletion", "deps", "native-config"})
 
 
 @dataclass(frozen=True)
@@ -33,10 +33,12 @@ class IsoInputs:
     DEPS: bool
     PROTECTED: bool
     OWNED_BRANCH: bool
+    NEEDS_BRANCH: bool = False
 
 
-def decide_isolation(i: IsoInputs) -> str:
-    """First matching rule wins (plan §6.2)."""
+def decide_isolation(i: IsoInputs, high_isolation: str = "W5") -> str:
+    """First matching rule wins (plan §6.2). High risk, a dependency change or a branch-sized change runs on
+    W5 while W4 is not built; ``high_isolation="W4"`` keeps the old mapping."""
     if i.RO:
         return "W0"
     if i.PARALLEL or i.OTHER_WRITER:
@@ -45,8 +47,8 @@ def decide_isolation(i: IsoInputs) -> str:
         return "W2"
     if i.EXPERIMENT:
         return "W3"
-    if i.HIGH_RISK or i.DEPS:
-        return "W4"
+    if i.HIGH_RISK or i.DEPS or i.NEEDS_BRANCH:
+        return "W4" if high_isolation == "W4" else "W5"
     if i.PROTECTED:
         return "W5"
     if i.OWNED_BRANCH:
@@ -130,21 +132,21 @@ def protected(branch: str | None, patterns) -> bool:
 
 def compute_inputs(repo, *, ro: bool, risk: str, difficulty: str, risk_tags, experiment: bool,
                    est_files: int = 0, est_loc: int = 0, parallel: bool = False,
-                   owned_branch: str | None = None, other_writer: bool, cfg) -> IsoInputs:
-    tags = set(risk_tags or ())
+                   owned_branch: str | None = None, other_writer: bool, cfg, path_tags=()) -> IsoInputs:
+    """Only path evidence (``path_tags``) sets HIGH_RISK or DEPS; risk, risk_tags and est_files never do."""
+    tags = set(path_tags or ())
     branch = _branch(repo)
-    high = (risk == "high" or difficulty == "critical" or bool(tags & _HIGH_TAGS)
-            or est_loc >= 400)
     return IsoInputs(
         RO=ro,
         OTHER_WRITER=other_writer,
         DIRTY_FOREIGN=bool(_lines(repo, "status", "--porcelain")),
         PARALLEL=parallel,
         EXPERIMENT=experiment,
-        HIGH_RISK=high,
+        HIGH_RISK=bool(tags & _HIGH_TAGS),
         DEPS="deps" in tags,
         PROTECTED=protected(branch, cfg.worktrees["protected"]),
         OWNED_BRANCH=branch is not None and branch == owned_branch and branch.startswith("mr/"),
+        NEEDS_BRANCH=difficulty == "critical" or est_loc >= 400,
     )
 
 

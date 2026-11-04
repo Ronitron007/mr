@@ -446,11 +446,13 @@ def _run(code: str, prompt: str, tree: str, *, cfg, task_id: str, attempt: int):
     return res, guarded
 
 
-def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | None = None) -> PlanResult:
-    """Run the planner rung for the task's difficulty. Invalid output is retried once, then ok=False."""
+def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | None = None,
+         rung: str | None = None) -> PlanResult:
+    """Run the planner rung for the task's difficulty, or ``rung`` when given. Invalid output is retried once,
+    then ok=False."""
     repo_name = os.path.basename(os.path.abspath(tree).rstrip(os.sep))
     runner = acceptance.runner_for(cfg, repo_name)
-    primary = cfg.planner.rungs[difficulty or getattr(task, "difficulty", None) or "medium"]
+    primary = rung or cfg.planner.rungs[difficulty or getattr(task, "difficulty", None) or "medium"]
     base = build_prompt(task.text, task.files_named, _excerpt(tree), task_id, runner)
     raws: list[str] = []
     errors: list[str] = []

@@ -49,12 +49,13 @@ class TestTable(unittest.TestCase):
         self.assertEqual(len(rows), 16)
         for row in rows:
             with self.subTest(row["id"]):
-                self.assertEqual(iso.decide_isolation(iso.IsoInputs(**row["inputs"])), row["expect"], row["note"])
+                got = iso.decide_isolation(iso.IsoInputs(**row["inputs"]), high_isolation="W4")  # the old table
+                self.assertEqual(got, row["expect"], row["note"])
 
     def test_table_property(self):
         order = [("W0", lambda v: v["RO"]), ("W1", lambda v: v["PARALLEL"] or v["OTHER_WRITER"]),
                  ("W2", lambda v: v["DIRTY_FOREIGN"]), ("W3", lambda v: v["EXPERIMENT"]),
-                 ("W4", lambda v: v["HIGH_RISK"] or v["DEPS"]), ("W5", lambda v: v["PROTECTED"]),
+                 ("W5", lambda v: v["HIGH_RISK"] or v["DEPS"]), ("W5", lambda v: v["PROTECTED"]),
                  ("W6", lambda v: v["OWNED_BRANCH"]), ("W7", lambda v: True)]
         count = 0
         for combo in itertools.product([False, True], repeat=9):
@@ -141,17 +142,22 @@ class TestInputs(Base):
 
     def test_high_risk_and_deps(self):
         self.assertFalse(self.inputs().HIGH_RISK)
-        self.assertTrue(self.inputs(risk="high").HIGH_RISK)
-        self.assertTrue(self.inputs(difficulty="critical").HIGH_RISK)
+        self.assertFalse(self.inputs(risk="high").HIGH_RISK)
+        self.assertFalse(self.inputs(difficulty="critical").HIGH_RISK)
         self.assertFalse(self.inputs(est_files=8).HIGH_RISK)
         self.assertFalse(self.inputs(est_files=20).HIGH_RISK)
         self.assertFalse(self.inputs(est_files=7, est_loc=399).HIGH_RISK)
-        self.assertTrue(self.inputs(est_loc=400).HIGH_RISK)
-        for tag in ("deps", "migration", "native-config"):
-            self.assertTrue(self.inputs(risk_tags=[tag]).HIGH_RISK, tag)
-        self.assertFalse(self.inputs(risk_tags=["auth"]).HIGH_RISK)
-        self.assertTrue(self.inputs(risk_tags=["deps"]).DEPS)
-        self.assertFalse(self.inputs(risk_tags=["migration"]).DEPS)
+        self.assertFalse(self.inputs(est_loc=400).HIGH_RISK)
+        for tag in ("auth", "payments", "migration", "data-deletion", "deps", "native-config"):
+            self.assertFalse(self.inputs(risk="high", risk_tags=[tag]).HIGH_RISK, "text tag " + tag)
+            self.assertTrue(self.inputs(path_tags=[tag]).HIGH_RISK, "path tag " + tag)
+        self.assertFalse(self.inputs(path_tags=["secrets"]).HIGH_RISK)
+        self.assertTrue(self.inputs(path_tags=["deps"]).DEPS)
+        self.assertFalse(self.inputs(risk_tags=["deps"]).DEPS)
+        self.assertFalse(self.inputs(path_tags=["migration"]).DEPS)
+        self.assertTrue(self.inputs(difficulty="critical").NEEDS_BRANCH)
+        self.assertTrue(self.inputs(est_loc=400).NEEDS_BRANCH)
+        self.assertFalse(self.inputs(est_files=20, est_loc=399).NEEDS_BRANCH)
         self.assertEqual(floors(frozenset(), 8), ("low", "hard"))
         self.assertEqual(floors(frozenset(), 20), ("low", "hard"))
         self.assertEqual(floors(frozenset(), 7), ("low", "trivial"))
@@ -164,8 +170,8 @@ class TestInputs(Base):
             self.assertEqual(iso.decide_isolation(got), "W7", count)
             self.assertIsNone(iso.unsupported_reason("W7"))
         wide = self.inputs(est_loc=400)
-        self.assertTrue(wide.HIGH_RISK)
-        self.assertEqual(iso.decide_isolation(wide), "W4")
+        self.assertFalse(wide.HIGH_RISK)
+        self.assertEqual(iso.decide_isolation(wide), "W5")
 
     def test_nine_files_pipeline_is_w7(self):
         gitfix.git(self.repo, "switch", "-c", "feature/plain")

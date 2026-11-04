@@ -53,16 +53,16 @@ class TestFile8(unittest.TestCase):
         self.assertEqual(floors(frozenset({"auth"}), 8), ("high", "hard"))
         self.assertTrue(confident({"refactor": 1}, frozenset(), 8, 1))
         self.assertFalse(confident({"refactor": 1}, frozenset(), 7, 0))
-        self.assertFalse(self.inputs(est_files=7, est_loc=399).HIGH_RISK)
-        self.assertTrue(self.inputs(est_loc=400).HIGH_RISK)
-        self.assertTrue(self.inputs(risk="high", est_files=1).HIGH_RISK)
-        self.assertTrue(self.inputs(difficulty="critical", est_files=1).HIGH_RISK)
-        for tag in ("deps", "migration", "native-config"):
-            self.assertTrue(self.inputs(risk_tags=[tag], est_files=1).HIGH_RISK, tag)
-        self.assertFalse(self.inputs(risk_tags=["auth"], est_files=1).HIGH_RISK)
+        self.assertFalse(self.inputs(est_files=7, est_loc=399).NEEDS_BRANCH)
+        self.assertTrue(self.inputs(est_loc=400).NEEDS_BRANCH)
+        self.assertFalse(self.inputs(risk="high", est_files=1).HIGH_RISK)
+        self.assertTrue(self.inputs(difficulty="critical", est_files=1).NEEDS_BRANCH)
+        for tag in ("deps", "migration", "native-config", "auth"):
+            self.assertTrue(self.inputs(path_tags=[tag], est_files=1).HIGH_RISK, tag)
+            self.assertFalse(self.inputs(risk_tags=[tag], est_files=1).HIGH_RISK, tag)
         self.assertFalse(self.inputs(est_files=8).HIGH_RISK)
         self.assertFalse(self.inputs(est_files=20).HIGH_RISK)
-        self.assertFalse(self.inputs(est_files=8, est_loc=399).HIGH_RISK)
+        self.assertFalse(self.inputs(est_files=8, est_loc=399).NEEDS_BRANCH)
         with open(ISOLATION_PY, encoding="utf-8") as handle:
             source = handle.read()
         self.assertIn("est_loc >= 400", source)
@@ -72,10 +72,11 @@ class TestFile8(unittest.TestCase):
     def test_many_files_on_plain_branch_is_w7(self):
         gitfix.git(self.repo, "switch", "-c", "feature/plain")
         kept = self.inputs(est_loc=400)
-        self.assertTrue(kept.HIGH_RISK)
+        self.assertTrue(kept.NEEDS_BRANCH)
+        self.assertFalse(kept.HIGH_RISK)
         self.assertFalse(kept.PROTECTED)
         self.assertFalse(kept.DIRTY_FOREIGN)
-        self.assertEqual(isolation.decide_isolation(kept), "W4")
+        self.assertEqual(isolation.decide_isolation(kept), "W5")
         self.assertIn("not built in v1", isolation.unsupported_reason("W4"))
         for count in (8, 20):
             got = self.inputs(est_files=count)

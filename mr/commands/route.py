@@ -12,7 +12,7 @@ from mr.config import ConfigError, load
 from mr.gitmeta import read_head
 from mr.judge import Judge, judge as judge_mod
 from mr.prepass import extract
-from mr.router import Decision, RouteError, decide
+from mr.router import MAPPED, Decision, RouteError, decide, map_design
 from mr.task import Params, TaskError, load_task, make_task
 
 _DESIGN = "design route not built; re-run with --route cascade or plan by hand"
@@ -34,13 +34,13 @@ def run(args) -> int:
             task = load_task(None, task_file, _params(args), repo, home=cfg.paths.home)
         repo = task.repo
         features = extract(task, None)
-        decision = decide(task, features, cfg)
+        found = facts.try_build(task.text, repo, task.files_named)
+        decision = decide(task, features, cfg, facts=found)
         jmode = shadow.judge_mode(getattr(args, "judge", None), cfg.judge or {}) if models else "off"
         mode = shadow.effective_mode(getattr(args, "classifier", None), cfg.classifier or {}) if models else "off"
         if jmode == "on":
             mode = "off"  # the judge's fallback is the only classifier call
         clf = _shadow_classifier(args, cfg, task, features, mode)
-        found = facts.try_build(task.text, repo, task.files_named)
         intake = _intake(args, cfg, task, features, decision, found) if jmode == "on" else None
         jdg = _shadow_judge(args, cfg, task, features, jmode, found)
     except (TaskError, RouteError) as exc:
@@ -50,9 +50,11 @@ def run(args) -> int:
         print(f"config error: {exc}", file=sys.stderr)
         return ec.USAGE
     if intake is not None:
-        decision = intake.decision
+        decision = map_design(intake.decision, cfg, task.params)
         for o in intake.overrides:
             print(judge_mod.override_line(o), file=sys.stderr)
+    if MAPPED in decision.reasons:
+        print(f"{MAPPED}: planned by an Opus planner and reviewed at S+ at least", file=sys.stderr)
     code = _exit_code(decision)
     if getattr(args, "json", False):
         payload = _payload(task, features, decision, code)

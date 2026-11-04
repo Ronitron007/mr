@@ -97,11 +97,11 @@ class TestCliRoute(unittest.TestCase):
                     "--no-models",
                 ]
             )
-            self.assertEqual(code, 3, err)
-            self.assertIn(_DESIGN, err)
+            self.assertEqual(code, 0, err)  # a text-only risk word is not design evidence
+            self.assertNotIn(_DESIGN, err)
             doc = json.loads(out)
-            self.assertEqual(doc["exit"], 3)
-            self.assertEqual(doc["decision"]["route"], "design")
+            self.assertEqual(doc["exit"], 0)
+            self.assertEqual(doc["decision"]["route"], "cascade")
 
             code, out, err = self._main(
                 [
@@ -110,6 +110,10 @@ class TestCliRoute(unittest.TestCase):
                     "add login with oauth",
                     "--repo",
                     repo,
+                    "--type",
+                    "code",
+                    "--difficulty",
+                    "critical",
                     "--route",
                     "cascade",
                     "--explain",

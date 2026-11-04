@@ -341,7 +341,7 @@ def _plan(c) -> int | None:
     c.seq += 1
     started, t0 = now_ist(), time.time()
     res = planner.plan(task, cfg=cfg, tree=task.repo, task_id=task.id, attempt=c.seq,
-                       difficulty=c.d.difficulty)
+                       difficulty=c.d.difficulty, rung=c.d.planner)
     c.n_plan += res.attempts
     for rr, guarded in res.spend:
         pipeline.add_cost(c.cost, rr, guarded)
@@ -401,7 +401,7 @@ def _prompt(c, handoff: str) -> str:
         goal=goal, scope="\n".join(f"- {p}" for p in own) or pipeline.NO_FILES, task_id=task.id,
         locked_files="\n".join(f"- {p}" for p in c.locked) or "(none — test files in SCOPE may be edited)",
         verify="\n".join(f"  {x}" for x in cmds) or "  (none configured: re-read your diff)",
-        handoff=handoff)
+        handoff=handoff) + pipeline.deps_line(c)
 
 
 def _handoff(c, o: dict, cur: str, reset: bool) -> str:
@@ -556,7 +556,11 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
             rv, sig["C"] = _review(c, rung, patch,
                                    extra_reqs=_adv_review_reqs(verdict) if adv_c else None)
             out["C"] = [f"{it.get('id')}: {it.get('evidence')}" for it in rv.items if it.get("verdict") == "fail"]
-        if not green or (rv is not None and not rv.ok):
+        if rv is not None and rv.deferred:
+            c.frees_hint = guard.check(rv.reviewer, cfg).frees_hint or "≈ in 60 min"
+            out.update(stop=exitcodes.DEFERRED, why=f"required review {rv.reviewer} denied by the guard on a "
+                       f"high-risk task; the patch is saved in {c.patch_path}")
+        elif not green or (rv is not None and not rv.ok):
             out.update(_classify(c, rung, rr, dres, hres, sa, rv, infra))
         if code == "S+A":
             out.update(_adv_verdict(c, rr, aud, green, out["cls"]))
@@ -564,7 +568,8 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
                    and len(out["H"]) <= _MAX_NEW_H)
     c.rungs.append({"rung": code, "model": rung.model, "class": out["cls"], "signals": dict(sig),
                     "patch": c.patch_path, "failing": list(out["A"])})
-    c.log.append(tag_record(pipeline.attempt_record(c, rung, code, rr, guarded, attempt, started, sig, out["cls"]),
+    c.log.append(tag_record(pipeline.attempt_record(c, rung, code, rr, guarded, attempt, started, sig, out["cls"],
+                                                    decision="stop" if out["stop"] is not None else None),
                             rr, droid_try))
     return out
 
@@ -578,7 +583,7 @@ def _review(c, rung, patch: bytes, extra_reqs=None):
         reqs = list(reqs or []) + list(extra_reqs)
     rv = review.review(patch.decode("utf-8", "replace"), reqs,
                        None, rung.model, c.d.risk, cfg=c.cfg, tree=c.task.repo, task_id=c.task.id,
-                       attempt=c.seq)
+                       attempt=c.seq, required=c.d.required_review, defer=getattr(c, "high_risk", False))
     c.seq += 1
     c.n_review += rv.attempts
     for rr, guarded in rv.spend:
@@ -628,14 +633,15 @@ def _step(c, cur: str, cls: str) -> Step:
 
 def run_task(c) -> int:
     """The full ladder: planner (medium+), rungs, signals, escalation, accept or exit (§10.2)."""
-    cfg, task, d = c.cfg, c.task, c.d
+    cfg, task = c.cfg, c.task
     if (code := pipeline.start(c)) is not None:
         return code
+    d = c.d
     if not c.ladder:
         return c.stop(exitcodes.NOT_ACCEPTED, "empty ladder after the budget filter")
     c.reset_tree = patches.take_reset_tree(task.repo)
     c.save_state("plan")
-    if d.route == "cascade" and _DIFFS.index(d.difficulty) >= _DIFFS.index("medium"):
+    if d.planner or (d.route == "cascade" and _DIFFS.index(d.difficulty) >= _DIFFS.index("medium")):
         if (code := _plan(c)) is not None:
             return code
     else:

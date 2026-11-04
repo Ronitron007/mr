@@ -40,6 +40,7 @@ ladders:                                    # plan §3.1, verbatim
 review_required: {bugfix_critical: true}    # [+R] cells
 design_route:
   triggers: {risk_tags: [auth, payments, migration, data-deletion], cross_layer_min: 2, hard_and_ambiguous: true}
+  map_to_cascade: true            # a design decision runs as cascade (Opus plan, S+ review) until the design route is built
   # v1.2: no `types`/`difficulty` triggers; the table cell decides (a cell value `design_route` still routes there)
   architect: {rung: O+, mode: plan, max_per_feature: 1, max_replans: 1, max_opus_plans_per_hour: 2, est_pts: 12}
   architect_fallback: ["S+", "G-x+human_spec_review", defer]   # Cursor-path Opus removed (hard rule §0.3)
@@ -55,6 +56,7 @@ guard: {probe_if_sample_older_s: 600, wait_lock_s: 600,   # est held constant in
         est_seed: {S: 4, S+: 6, S+A: 12, O: 10, O+: 15, PLAN_O: 12, C+: 3}, reservation_ttl_s: 3600}
 review: {map: {grok: S, kimi: G-h, composer: G-h, claude: G-x}, high_risk_grok: S, tiebreak: S, claude_denied: C25}
 planner: {rungs: {trivial: G-h, easy: G-h, medium: G-h, hard: O, critical: O}, claude_denied: G-h}   # rung by task difficulty; O only via the claude CLI; not a ladder rung (no claude_rungs/opus_rungs count)
+risk: {high_isolation: W5}        # W5 (a mr/* branch) for high risk while W4 worktrees are not built; W4 keeps the old mapping
 worktrees: {per_repo: 3, box: 6, queue_min: 10, stale_h: 24, unmerged_keep_d: 14,
             protected: [main, master, "release/*", production], env_include: [".env", ".env.local"]}
 advisor: {mode: "on", rows_off: [], injection: adv.v2, max_consults: 1, reserve_pts: 12, per_hour_box: 3, per_day_box: 10,   # T20; advisor-consult-spec §11

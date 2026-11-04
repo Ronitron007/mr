@@ -57,6 +57,8 @@ class _Ctx:
         self.lock = None
         self.exit, self.reason = ec.INTERNAL, "unfinished"
         self.iso = None
+        self.high_risk = False  # path evidence of a high-risk change (pipeline.start)
+        self.path_tags: frozenset = frozenset()
         self.branch = self.orig_branch = None
         self.reset_tree = None
         self.rungs: list[dict] = []
@@ -263,14 +265,16 @@ def run(args) -> int:
         task = load_task(args.task, args.task_file, _params(args), args.repo or os.getcwd(),
                          home=cfg.paths.home)
         feats = prepass.extract(task, task.repo)
-        rules = decision = router.decide(task, feats, cfg)
+        found = facts.try_build(task.text, task.repo, task.files_named)
+        rules = decision = router.decide(task, feats, cfg, facts=found)
     except (TaskError, router.RouteError) as exc:
         _say(str(exc))
         return ec.USAGE
-    found = facts.try_build(task.text, task.repo, task.files_named)
     intake, parts = _intake(args, cfg, task, feats, rules, found)
     if intake is not None:
-        decision = intake.decision
+        decision = router.map_design(intake.decision, cfg, task.params)
+    if router.MAPPED in decision.reasons:
+        _say(f"{router.MAPPED}: planned by an Opus planner and reviewed at S+ at least")
     if args.once:
         ladder = [args.rung]
     else:  # --rung X without --once puts X first, like --prefer
@@ -416,10 +420,11 @@ def _join_judge(c: _Ctx) -> None:
 
 
 def _body(c: _Ctx) -> int:
-    cfg, task, d = c.cfg, c.task, c.d
+    cfg, task = c.cfg, c.task
     home, repo = cfg.paths.home, task.repo
     if (code := pipeline.start(c)) is not None:
         return code
+    d = c.d
 
     c.reset_tree = patches.take_reset_tree(repo)
     c.save_state("rung")
@@ -430,7 +435,7 @@ def _body(c: _Ctx) -> int:
         template = fh.read()
     scope_text = "\n".join(f"- {p}" for p in task.files_named) or pipeline.NO_FILES
     prompt = template.format(goal=task.text, scope=scope_text, locked_files="(none)",
-                             handoff="(first attempt)", task_id=task.id)
+                             handoff="(first attempt)", task_id=task.id) + pipeline.deps_line(c)
     before = isolation.snapshot(repo)
     attempt_started = now_ist()
     rr, guarded, droid_try = loop.run_rung(c, c.rung, prompt, 1)
@@ -620,6 +625,8 @@ def _output(c: _Ctx) -> None:
         _say(f"FINAL.md: {c.final_md}")
     if c.orig_branch:
         _say(f"original branch: {c.orig_branch} (work is on {c.branch})")
+    if c.exit == ec.OK and c.high_risk and c.branch:
+        _say(f"review and merge by hand: branch {c.branch} is not merged")
     if getattr(c.args, "json", False):
         print(json.dumps(_doc(c), ensure_ascii=False))
         return

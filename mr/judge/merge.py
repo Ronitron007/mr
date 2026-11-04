@@ -188,10 +188,10 @@ def _tag_entry(tag: str, ans: dict, judge: str) -> dict:
     return {"tag": tag, "source": "text", "quote": ans.get("evidence"), "judge": judge, "conf": ans["conf"]}
 
 
-def _risk(g, rules, readings, dropped: set[str], floor: int, tags_floor: int) -> _Pick:
+def _risk(g, rules, readings, text_only: set[str], floor: int, tags_floor: int) -> _Pick:
     base = _RISK.index(rules.risk)
-    if dropped and base <= max(_tier(t) for t in dropped):
-        remaining = [_tier(t) for t in set(rules.risk_tags) - dropped]
+    if text_only:  # a rules risk that rests on words alone is not kept: the text tags are settled below
+        remaining = [_tier(t) for t in set(rules.risk_tags) - text_only]
         base = min(base, max(remaining, default=0))
     ans = _answer(readings, "risk", _is_index(len(_RISK) - 1))
     judged = g.step("risk", ans, base, ans["value"] if ans else 0)
@@ -291,6 +291,7 @@ def merge(task, facts, rules: router.Decision, readings: dict | None, cfg, *, so
     named = [c for c in facts.candidates if c.exists and "named" in c.why]
     diff_floor = _DIFF.index("hard") if len(named) >= _F3_FILES else 0
 
+    text_only = {i.tag for i in facts.risk_evidence if i.source == "text"} - path_tags
     applied, dropped, unresolved, evidence = _text_tags(g, facts, readings, path_tags)
     tags_floor = max([_tier(t) for t in applied] + [1 if unresolved else 0])
     strong = bool(path_tags & _HIGH) or bool(unresolved)
@@ -298,7 +299,7 @@ def merge(task, facts, rules: router.Decision, readings: dict | None, cfg, *, so
     difficulty = _difficulty(g, task, rules, readings, diff_floor)
     kind = _type(g, task, rules, readings, difficulty.value, cfg)
     route = _route(g, task, rules, readings)
-    risk = _risk(g, rules, readings, dropped, risk_floor, tags_floor)
+    risk = _risk(g, rules, readings, text_only, risk_floor, tags_floor)
     load_bearing = _flag(g, "load_bearing", rules.load_bearing, readings, loosen=True)
     review = _flag(g, "needs_review", False, readings, loosen=False)
     files = _files(g, facts, readings)
@@ -316,7 +317,9 @@ def merge(task, facts, rules: router.Decision, readings: dict | None, cfg, *, so
     decision = dataclasses.replace(
         rules, route=route.value, type=kind.value, difficulty=difficulty.value, risk=risk.value,
         risk_tags=frozenset(tags), load_bearing=load_bearing, ladder=ladder,
-        needs_review=router.review_rule(kind.value, difficulty.value, cfg) or strong or review,
+        needs_review=(router.review_rule(kind.value, difficulty.value, cfg) or strong or review
+                      or rules.required_review is not None),
+        planner=("O+" if rules.planner and difficulty.value == "critical" else rules.planner),
         reasons=tuple(dict.fromkeys(reasons)), sources=sources,
         files={"change": list(files["change"]), "new": list(files["new"]), "partial": files["partial"]},
         risk_evidence=tuple(evidence))

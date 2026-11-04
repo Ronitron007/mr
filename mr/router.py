@@ -1,10 +1,10 @@
 """Rules router (mr-spec §5.3, §9.2). ``decide`` is rules only; the judge merge (mr.judge.merge) sits on top of it."""
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from mr import facts as facts_mod
-from mr import shadow
+from mr import prepass, shadow
 from mr.config import Config, _match
 from mr.prepass import Features
 from mr.task import Task
@@ -14,6 +14,8 @@ _RISK = ("low", "medium", "high")
 _REVIEW_AT = frozenset({"code", "bugfix", "ios-native", "ui"})
 _OPUS = frozenset({"O", "O+"})
 _KIMI_DROP = frozenset({"K-h", "K-x"})
+MAPPED = "design_mapped_to_cascade"
+STRENGTH = ("S", "S+", "O", "O+")
 
 
 class InvariantError(Exception):
@@ -42,16 +44,27 @@ class Decision:
     files: dict = field(default_factory=dict)
     risk_evidence: tuple = ()
     judge_status: str | None = None
+    planner: str | None = None
+    required_review: str | None = None
 
 
-def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None) -> Decision:
+def path_tags(f: Features, facts=None) -> frozenset[str]:
+    """Risk tags with path evidence: the facts' non-text risk items, else the path regexes over files_named."""
+    if isinstance(facts, facts_mod.Facts):
+        return frozenset(i.tag for i in facts.risk_evidence if i.source != "text")
+    return frozenset(tag for tag, _text_rx, path_rx in prepass.RISK_PATTERNS
+                     if any(path_rx.search(p) for p in f.files_named))
+
+
+def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None, facts=None) -> Decision:
     """Merge params and prepass rules. ``judge`` and ``clf`` are shadow answers: they never change the
-    decision and are logged by ``route_record``."""
+    decision and are logged by ``route_record``. ``facts`` (a facts.Facts, or None) gives the path evidence the
+    design trigger reads; a design decision is mapped to cascade (``map_design``)."""
     reasons: list[str] = []
     kind, type_src = _resolve_type(task, f)
     difficulty, diff_src = _resolve_difficulty(task, f, reasons)
     cell_design = cfg.ladders[kind][difficulty] == "design_route"
-    triggered = cell_design or _design_trigger(f, difficulty, cfg)
+    triggered = cell_design or _design_trigger(f, difficulty, cfg, facts)
     if f.judgment_keywords:
         reasons.append("judgment_keywords_logged_only")
     if task.params.route:
@@ -86,7 +99,18 @@ def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None) -> Decisi
         },
     )
     check_invariants(decision, f, task, cfg)
-    return decision
+    return map_design(decision, cfg, task.params)
+
+
+def map_design(d: Decision, cfg: Config, params) -> Decision:
+    """A design decision runs as cascade with an Opus plan and an S+ review until the design route is built."""
+    if d.route != "design" or not (cfg.design_route or {}).get("map_to_cascade", True):
+        return d
+    reasons = list(d.reasons)
+    ladder, _src = build_ladder("cascade", d.type, d.difficulty, cfg, params, reasons)
+    reasons.append(MAPPED)
+    return replace(d, route="cascade", ladder=ladder, planner="O+" if d.difficulty == "critical" else "O",
+                   required_review="S+", needs_review=True, reasons=tuple(dict.fromkeys(reasons)))
 
 
 def check_invariants(d: Decision, f: Features, task: Task, cfg: Config) -> None:
@@ -138,6 +162,18 @@ def route_record(task: Task, f: Features, d: Decision, judge=None, clf=None, fac
     return rec
 
 
+def at_least(rung: str | None, floor: str) -> str:
+    """The stronger Claude rung of ``rung`` and ``floor`` (S < S+ < O < O+)."""
+    return floor if rung is None or STRENGTH.index(rung) < STRENGTH.index(floor) else rung
+
+
+def require_strong(d: Decision) -> Decision:
+    """High risk (path evidence): a planner of at least S+ (O when hard or critical) and an S+ review at least."""
+    planner = "O" if d.difficulty in ("hard", "critical") else "S+"
+    return replace(d, planner=at_least(d.planner, planner), required_review=at_least(d.required_review, "S+"),
+                   needs_review=True)
+
+
 def build_ladder(route, kind, difficulty, cfg, params, reasons) -> tuple[tuple[str, ...], str]:
     """Select the ladder for a route and cell, then apply ``params.prefer`` and ``params.budget``."""
     ladder, ladder_src = _select_ladder(route, kind, difficulty, cfg, reasons)
@@ -178,13 +214,17 @@ def _resolve_difficulty(task: Task, f: Features, reasons: list[str]) -> tuple[st
     return chosen, "rule"
 
 
-def _design_trigger(f: Features, difficulty: str, cfg: Config) -> bool:
+def _design_trigger(f: Features, difficulty: str, cfg: Config, facts=None) -> bool:
+    """Only path evidence triggers design: a text-only risk word never does."""
     spec = (cfg.design_route or {}).get("triggers") or {}
     tags = spec.get("risk_tags") or ()
-    if set(f.risk_tags) & set(tags):
+    if path_tags(f, facts) & set(tags):
         return True
     minimum = spec.get("cross_layer_min")
-    if isinstance(minimum, int) and not isinstance(minimum, bool) and f.cross_layer >= minimum:
+    layers = f.cross_layer
+    if isinstance(facts, facts_mod.Facts):
+        layers = prepass._cross_layer([c.path for c in facts.candidates if c.exists])
+    if isinstance(minimum, int) and not isinstance(minimum, bool) and layers >= minimum:
         return True
     return bool(spec.get("hard_and_ambiguous") and difficulty == "hard" and f.ambiguity >= 2)
 

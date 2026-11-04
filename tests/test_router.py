@@ -175,8 +175,18 @@ class TestRouter(unittest.TestCase):
                         _task(Params(type=kind, difficulty=diff)), blank, self.cfg
                     )
                     if cell == "design_route":
-                        self.assertEqual(decision.route, "design")
-                        self.assertEqual(decision.ladder, ())
+                        # a design cell maps to cascade: the cell below, an Opus plan and an S+ review
+                        lower = next(
+                            _EXPECTED[kind][name]
+                            for name in reversed(_DIFF[: _DIFF.index(diff)])
+                            if _EXPECTED[kind][name] != "design_route"
+                        )
+                        self.assertEqual(decision.route, "cascade")
+                        self.assertEqual(decision.ladder, lower)
+                        self.assertIn("design_mapped_to_cascade", decision.reasons)
+                        self.assertEqual(decision.planner, "O+" if diff == "critical" else "O")
+                        self.assertEqual(decision.required_review, "S+")
+                        self.assertTrue(decision.needs_review)
                     else:
                         self.assertEqual(decision.route, "cascade")
                         self.assertEqual(decision.ladder, cell)
@@ -318,14 +328,25 @@ class TestRouter(unittest.TestCase):
 
     def test_design_trigger_and_cascade_override(self) -> None:
         features = _features(
+            files_named=("src/auth/login.ts",),
             risk_tags=frozenset({"auth"}),
             risk_floor="high",
             difficulty_floor="hard",
             difficulty_est="hard",
         )
         design = decide(_task(Params(type="code")), features, self.cfg)
-        self.assertEqual(design.route, "design")
-        self.assertEqual(design.ladder, ())
+        self.assertEqual(design.route, "cascade")
+        self.assertIn("design_mapped_to_cascade", design.reasons)
+        self.assertEqual((design.planner, design.required_review), ("O", "S+"))
+        self.assertEqual(design.ladder, ("G-x", "S+", "O"))
+        text_only = decide(_task(Params(type="code")), _features(
+            risk_tags=frozenset({"auth"}), risk_floor="high", difficulty_floor="hard", difficulty_est="hard"),
+            self.cfg)
+        self.assertNotIn("design_mapped_to_cascade", text_only.reasons)
+        self.assertIsNone(text_only.planner)
+        off = from_dict({**defaults(), "design_route": {**defaults()["design_route"], "map_to_cascade": False}})
+        unmapped = decide(_task(Params(type="code")), features, off)
+        self.assertEqual((unmapped.route, unmapped.ladder), ("design", ()))
         forced = decide(_task(Params(type="code", route="cascade")), features, self.cfg)
         self.assertEqual(forced.route, "cascade")
         self.assertIn("param_overrode_trigger", forced.reasons)

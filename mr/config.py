@@ -150,6 +150,7 @@ class Config:
     warnings: tuple[str, ...]
     source: str
     droid: dict | None = None
+    risk: dict | None = None
 
 
 def load(path: str | None = None, overrides: dict | None = None) -> Config:
@@ -205,6 +206,7 @@ def validate(raw: dict) -> list[str]:
     _droid(raw)
     _blocks(raw)
     _acceptance_block(raw)
+    _risk_block(raw)
     warnings.extend(_paths(raw))
     return warnings
 
@@ -434,6 +436,21 @@ def _uses(raw: dict, rungs: dict, patterns: list[str]) -> None:
             _code(entry[: -len(_HUMAN)], path, rungs)
             continue
         _code(entry, path, rungs)
+    if "map_to_cascade" in design and not isinstance(design["map_to_cascade"], bool):
+        raise ConfigError("design_route.map_to_cascade: must be true or false")
+
+
+def _risk_block(raw: dict) -> dict:
+    """Optional ``risk`` block, filled with the defaults. ``high_isolation`` is W4 or W5."""
+    block = raw.get("risk")
+    if block is None:
+        block = {}
+    if not isinstance(block, dict):
+        raise ConfigError("risk: expected a mapping")
+    out = {"high_isolation": "W5", **copy.deepcopy(block)}
+    if not isinstance(out["high_isolation"], str) or out["high_isolation"] not in ("W4", "W5"):
+        raise ConfigError("risk.high_isolation: must be W4 or W5")
+    return out
 
 
 def _code(code, path: str, rungs: dict) -> None:
@@ -938,6 +955,7 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
         warnings=tuple(warnings),
         source=source,
         droid=_droid_copy(raw),
+        risk=_risk_block(raw),
     )
 
 

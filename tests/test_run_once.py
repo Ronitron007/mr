@@ -356,17 +356,26 @@ class TestLockAndGuard(RunCase):
     def test_design_route_exit3(self):
         text = "rewrite the payments checkout flow with new auth"
         self.cursor({"files": {"README.md": "# test repo\nx\n"}})
-        code, _, err = self.mr(text=text)
+        code, out, err = self.mr(text=text, json_out=True)  # words alone are not design evidence
+        self.assertEqual(code, 0, err)
+        self.assertNotIn("design route not built", err)
+        self.assertEqual(len(self.records("route")), 1)
+        self.assertEqual(self.state_of(json.loads(out)["task"])["isolation"], "W7")  # not W4: no path evidence
+        calls = len(self.calls())
+        with open(self.cfgpath, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        raw["design_route"] = {"map_to_cascade": False}
+        with open(self.cfgpath, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
+        code, _, err = self.mr("--type", "code", "--difficulty", "critical", text="rewrite the cache layer")
         self.assertEqual(code, 3, err)
         self.assertIn("design route not built; re-run with --route cascade or plan by hand", err)
-        self.assertEqual(self.calls(), [])
-        self.assertEqual(len(self.records("route")), 1)
-        self.assertEqual(self.only_task()["outcome"], "needs_human")
+        self.assertEqual(len(self.calls()), calls)
+        routes = self.records("route")
+        self.assertEqual(len(routes), 2)
+        self.assertEqual(routes[-1]["design_mapped_to_cascade"], False)
+        self.assertEqual(self.records("task")[-1]["outcome"], "needs_human")
         self.assertEqual(os.path.getsize(self.lock_path()) if os.path.exists(self.lock_path()) else 0, 0)
-        code, _, err = self.mr("--route", "cascade", text=text)
-        # --route cascade gets past the route; this high-risk text then needs W4 (not built).
-        self.assertEqual(code, 4, err)
-        self.assertIn("W4", err)
 
 
 class TestSubprocess(RunCase):
