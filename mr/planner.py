@@ -7,6 +7,7 @@ first object that passes validate is returned.
 """
 from __future__ import annotations
 
+import copy
 import json
 import os
 import re
@@ -37,8 +38,13 @@ class PlanResult(NamedTuple):
     rung: str = ""  # the rung the last attempt actually ran on
     spend: tuple = ()  # (RunResult, GuardedRun) per Claude planner call, for the task cost block
     notes: tuple = ()  # why an attempt left the configured rung (Claude denied)
+    repairs: list = []  # auto_repair entries of the attempt that decided the result
+    retry_errors: list = []  # the errors the second attempt was given
+    status: str = "rejected"  # valid | repaired | rejected
+    infra: bool = False  # both attempts timed out or gave no JSON document
 
 
+_NO_DOC = "planner output is not one JSON document"
 RESOLVER_LINE = "These files come from mr's resolver and the judge; add any file the change needs."
 
 
@@ -170,7 +176,7 @@ def _unparsed_errors(text: str, *, repo_root: str, runner: str) -> list[str]:
         if messages:
             return [f"{head}: {'; '.join(messages)}"]
         return [head]
-    return ["planner output is not one JSON document"]
+    return [_NO_DOC]
 
 
 def _norm_rel(path) -> str | None:
@@ -378,6 +384,155 @@ def validate(doc, *, repo_root: str, runner: str) -> list[str]:
     return errors
 
 
+def _str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(item, str) for item in value)
+
+
+def _scope_lists(doc: dict):
+    """(scope.modify, scope.create) when both are lists of strings, else None."""
+    scope = doc.get("scope")
+    if not isinstance(scope, dict) or not _str_list(scope.get("modify")) or not _str_list(scope.get("create")):
+        return None
+    return scope["modify"], scope["create"]
+
+
+def _test_rels(doc: dict) -> set[str]:
+    tests = doc.get("tests")
+    if not isinstance(tests, list):
+        return set()
+    return {rel for item in tests if isinstance(item, dict) and (rel := _norm_rel(item.get("path")))}
+
+
+def _norm_set(paths: list[str]) -> set[str]:
+    return {rel for path in paths if (rel := _norm_rel(path))}
+
+
+def _repo_relative(path: str, root: str) -> str | None:
+    """The repo-relative form of a ./ path or an absolute path inside the repo, else None."""
+    if path.startswith("./"):
+        return _norm_rel(path)
+    if not os.path.isabs(path):
+        return None
+    for base in dict.fromkeys((os.path.realpath(root), os.path.abspath(root))):
+        rel = os.path.relpath(path, base)
+        if rel != "." and rel != ".." and not rel.startswith("../"):
+            return _norm_rel(rel.replace(os.sep, "/"))
+    return None
+
+
+def _fix_paths(doc: dict, root: str, runner: str, repairs: list[dict]) -> None:
+    lists = []
+    scope_lists = _scope_lists(doc)
+    if scope_lists:
+        lists += [("scope.modify", scope_lists[0]), ("scope.create", scope_lists[1])]
+    if isinstance(doc.get("files_map"), dict):
+        lists += [(f"files_map.{key}", val) for key, val in doc["files_map"].items() if _str_list(val)]
+    for label, items in lists:
+        for index, path in enumerate(items):
+            rel = _repo_relative(path, root)
+            if rel and rel != path:
+                items[index] = rel
+                repairs.append({"kind": "relative_path", "path": rel, "detail": f"{label}: {path} -> {rel}"})
+
+
+def _fix_scope(doc: dict, root: str, runner: str, repairs: list[dict]) -> None:
+    lists = _scope_lists(doc)
+    if not lists:
+        return
+    modify, create = lists
+    tests = _test_rels(doc)
+    for path in list(create):
+        rel = _norm_rel(path)
+        if rel is None or rel in tests or not os.path.lexists(os.path.join(root, rel)):
+            continue
+        create[:] = [p for p in create if p != path]
+        if rel not in _norm_set(modify):
+            modify.append(rel)
+        repairs.append({"kind": "create_exists", "path": rel, "detail": "exists in the repo; moved to scope.modify"})
+    for path in list(modify):
+        rel = _norm_rel(path)
+        if rel is None or rel in tests or _pattern_ok(rel, runner) or os.path.lexists(os.path.join(root, rel)):
+            continue
+        modify[:] = [p for p in modify if p != path]
+        if rel not in _norm_set(create):
+            create.append(rel)
+        repairs.append({"kind": "modify_missing", "path": rel, "detail": "missing in the repo; moved to scope.create"})
+
+
+def _fix_tests_in_create(doc: dict, root: str, runner: str, repairs: list[dict]) -> None:
+    lists = _scope_lists(doc)
+    if not lists:
+        return
+    create = lists[1]
+    for rel in sorted(_test_rels(doc)):
+        if rel not in _norm_set(create):
+            create.append(rel)
+            repairs.append({"kind": "test_not_in_create", "path": rel, "detail": "test path added to scope.create"})
+
+
+def _fix_files_map(doc: dict, root: str, runner: str, repairs: list[dict]) -> None:
+    lists = _scope_lists(doc)
+    if not lists or not isinstance(doc.get("files_map"), dict):
+        return
+    modify, create = lists
+    for paths in doc["files_map"].values():
+        for path in paths if _str_list(paths) else ():
+            rel = _norm_rel(path)
+            if rel is None or rel in _norm_set(modify) | _norm_set(create):
+                continue
+            if os.path.lexists(os.path.join(root, rel)):
+                modify.append(rel)
+                repairs.append({"kind": "files_map_outside_scope", "path": rel,
+                                "detail": "existing file in files_map; added to scope.modify"})
+
+
+def _renumber_ids(items, prefix: str):
+    """{old id: new id} for items whose ids are out of sequence, or {} when they cannot be mapped safely."""
+    if not isinstance(items, list) or not all(isinstance(i, dict) and isinstance(i.get("id"), str) for i in items):
+        return {}
+    ids = [i["id"] for i in items]
+    if len(set(ids)) != len(ids):
+        return {}
+    return {old: f"{prefix}{n}" for n, old in enumerate(ids, start=1) if old != f"{prefix}{n}"}
+
+
+def _renumber(doc: dict, root: str, runner: str, repairs: list[dict]) -> None:
+    req_map = _renumber_ids(doc.get("requirements"), "R")
+    acc_map = _renumber_ids(doc.get("acceptance"), "A")
+    for key, mapping in (("requirements", req_map), ("acceptance", acc_map)):
+        for item in (doc[key] if mapping else ()):
+            if item["id"] in mapping:
+                new = mapping[item["id"]]
+                repairs.append({"kind": "renumber", "id": new, "detail": f"{item['id']} -> {new}"})
+                item["id"] = new
+    if req_map:
+        for item in doc.get("acceptance") if isinstance(doc.get("acceptance"), list) else ():
+            if isinstance(item, dict) and _str_list(item.get("covers")):
+                item["covers"] = [req_map.get(rid, rid) for rid in item["covers"]]
+        files_map = doc.get("files_map")
+        if isinstance(files_map, dict):
+            moved = {req_map.get(key, key): val for key, val in files_map.items()}
+            if len(moved) == len(files_map):
+                doc["files_map"] = moved
+
+
+def auto_repair(doc, *, repo_root: str, runner: str) -> tuple[dict, list[dict]]:
+    """Mechanical fixes for a checklist (spec 8A.3 step 1). Returns (new doc, repairs); the input is untouched.
+
+    Never edits test content or test paths and never writes a file. A malformed document comes back as is.
+    """
+    if not isinstance(doc, dict):
+        return doc, []
+    out = copy.deepcopy(doc)
+    repairs: list[dict] = []
+    try:
+        for step in (_fix_paths, _fix_scope, _fix_tests_in_create, _fix_files_map, _renumber):
+            step(out, repo_root, runner, repairs)
+    except (AttributeError, KeyError, TypeError, ValueError):  # a shape validate reports; do not half-repair it
+        return copy.deepcopy(doc), []
+    return out, repairs
+
+
 def _excerpt(tree: str) -> str:
     try:
         done = subprocess.run(
@@ -459,9 +614,10 @@ def _run(code: str, prompt: str, tree: str, *, cfg, task_id: str, attempt: int):
 
 
 def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | None = None,
-         rung: str | None = None, files: dict | None = None) -> PlanResult:
-    """Run the planner rung for the task's difficulty, or ``rung`` when given. Invalid output is retried once,
-    then ok=False. ``files`` is the decision files dict; None means the task's hint files."""
+         rung: str | None = None, files: dict | None = None, prior_errors: list[str] | None = None) -> PlanResult:
+    """Run the planner rung for the task's difficulty, or ``rung`` when given. Each attempt is parse, auto_repair,
+    validate, tests on base; an invalid attempt is retried once with its errors, then ok=False. ``files`` is the
+    decision files dict (None means the task's hint files); ``prior_errors`` go into the first prompt."""
     repo_name = os.path.basename(os.path.abspath(tree).rstrip(os.sep))
     runner = acceptance.runner_for(cfg, repo_name)
     primary = rung or cfg.planner.rungs[difficulty or getattr(task, "difficulty", None) or "medium"]
@@ -469,12 +625,18 @@ def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | 
         files = {"change": [{"path": p, "src": "hint"} for p in task.hint_files], "new": []}
     base = build_prompt(task.text, files, _excerpt(tree), task_id, runner)
     raws: list[str] = []
-    errors: list[str] = []
+    errors: list[str] = list(prior_errors or [])
     spend: list = []
     notes: list[str] = []
+    repairs: list[dict] = []
+    retry_errors: list[str] = []
+    no_doc: list[bool] = []  # per attempt: timed out or no JSON document
     used = primary
     for n in (1, 2):
-        prompt = base if n == 1 else _with_errors(base, errors)
+        prompt = base if n == 1 and not errors else _with_errors(base, errors)
+        if n == 2:
+            retry_errors = list(errors)
+        repairs = []
         used = primary
         result, guarded = _run(used, prompt, tree, cfg=cfg, task_id=task_id, attempt=attempt)
         if guarded is not None and (result is None or guarded.wrapper_denied):
@@ -493,11 +655,15 @@ def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | 
         _save_raw(cfg.paths.home, task_id, n, text)
         if result.timed_out:
             errors = [f"planner timed out after {cfg.timeouts.planner_s}s"]
+            no_doc.append(True)
             continue
         doc = parse_document(text, repo_root=tree, runner=runner)
         if doc is None:
             errors = _unparsed_errors(text, repo_root=tree, runner=runner)
+            no_doc.append(errors == [_NO_DOC])
             continue
+        no_doc.append(False)
+        doc, repairs = auto_repair(doc, repo_root=tree, runner=runner)
         errors = validate(doc, repo_root=tree, runner=runner)
         if errors:
             continue
@@ -511,6 +677,7 @@ def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | 
             continue
         _write_json(os.path.join(state.task_dir(cfg.paths.home, task_id), "checklist.json"), doc)
         acceptance.lock(tree, doc, cfg, repo_name, task_id=task_id)
-        return PlanResult(True, doc, patches.take_reset_tree(tree), [], n, raws,
-                          used, tuple(spend), tuple(notes))
-    return PlanResult(False, None, None, errors, len(raws), raws, used, tuple(spend), tuple(notes))
+        return PlanResult(True, doc, patches.take_reset_tree(tree), [], n, raws, used, tuple(spend), tuple(notes),
+                          repairs, retry_errors, "repaired" if repairs else "valid", False)
+    return PlanResult(False, None, None, errors, len(raws), raws, used, tuple(spend), tuple(notes),
+                      repairs, retry_errors, "rejected", len(no_doc) == 2 and all(no_doc))

@@ -331,23 +331,51 @@ def _light(c, role: str, code: str, started: str, t0: float, signals: dict, cls:
             "failure_class": cls, "isolation": c.iso, "patch": None, "raw": None}
 
 
-def _plan(c) -> int | None:
-    """Planner (cfg.planner.rungs by difficulty): checklist, locked tests, red on base, new reset_tree.
+_STRONGER = {"G-h": "S", "S": "O", "S+": "O", "O": "O+", "O+": "O+"}
+PLAN_REJECTED = "plan rejected twice; running without a plan"
 
-    Not a ladder rung: a Claude planner call costs points but does not count to claude/opus rungs.
-    Exit 3 if invalid twice.
-    """
+
+def _plan_findings(c, res) -> str:
+    """What to do with a plan that is still invalid after two attempts. The plan judge hooks in here."""
+    return "replan"
+
+
+def _plan_call(c, rung, prior_errors=None):
+    """One planner.plan call (up to two attempts) and its planner row."""
     cfg, task = c.cfg, c.task
     c.seq += 1
     started, t0 = now_ist(), time.time()
     res = planner.plan(task, cfg=cfg, tree=task.repo, task_id=task.id, attempt=c.seq,
-                       difficulty=c.d.difficulty, rung=c.d.planner, files=c.d.files)
+                       difficulty=c.d.difficulty, rung=rung, files=c.d.files, prior_errors=prior_errors)
     c.n_plan += res.attempts
     for rr, guarded in res.spend:
         pipeline.add_cost(c.cost, rr, guarded)
-    c.log.append(_light(c, "planner", res.rung, started, t0, {"fallback": list(res.notes)} if res.notes else {},
-                        None if res.ok else "invalid_plan", ok=res.ok,
-                        guarded=_row_guarded(cfg, res.rung, res.spend)))
+    old_way = (getattr(cfg, "plan", None) or {}).get("judge", "on") == "off"
+    row = _light(c, "planner", res.rung, started, t0, {"fallback": list(res.notes)} if res.notes else {},
+                 "invalid_plan" if old_way and not res.ok else None, ok=res.ok,
+                 guarded=_row_guarded(cfg, res.rung, res.spend))
+    row.update(status=res.status, repairs=res.repairs, retry_errors=res.retry_errors)
+    c.log.append(row)
+    return res
+
+
+def _plan(c) -> int | None:
+    """Planner (cfg.planner.rungs by difficulty): checklist, locked tests, red on base, new reset_tree.
+
+    Not a ladder rung: a Claude planner call costs points but does not count to claude/opus rungs.
+    With plan.judge off, exit 3 if invalid twice. With it on, a plan still invalid after two attempts gets one
+    re-plan on the stronger planner, then the task runs without a plan; an unreachable planner defers (75).
+    """
+    cfg, task = c.cfg, c.task
+    res = _plan_call(c, c.d.planner)
+    if not res.ok and (getattr(cfg, "plan", None) or {}).get("judge", "on") == "on":
+        if res.infra or _plan_findings(c, res) == "replan":
+            res = _plan_call(c, _STRONGER.get(res.rung, "S"), None if res.infra else res.errors)
+        if res.infra:
+            return c.stop(exitcodes.DEFERRED, f"planner unavailable ({'; '.join(res.errors[:2])}); "
+                                              "state is saved, run it again later")
+        if not res.ok:
+            return _plan_less(c)
     if not res.ok:
         raw = os.path.join(state.task_dir(cfg.paths.home, task.id), "planner-a*.txt")
         return c.stop(exitcodes.HUMAN, f"planner gave no valid checklist twice ({'; '.join(res.errors[:3])}); "
@@ -360,6 +388,16 @@ def _plan(c) -> int | None:
     c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
     c.prior = []  # the two-model rule counts only attempts after a (re-)plan
     return None
+
+
+def _plan_less(c) -> None:
+    """No usable plan: no checklist, the no-checklist D limits, and a required review of at least S+."""
+    print(PLAN_REJECTED, file=sys.stderr)
+    c.plan_rejected = True
+    c.checklist, c.locked, c.lockdoc = None, (), None
+    c.d = replace(c.d, needs_review=True, required_review=router.at_least(c.d.required_review, "S+"))
+    c.base_set = hygiene.base_failures(c.task.repo, c.cfg, os.path.basename(c.task.repo), c.reset_tree)
+    c.prior = []
 
 
 def _replan(c) -> int | None:

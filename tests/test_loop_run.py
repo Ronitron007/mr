@@ -199,6 +199,11 @@ class TestCascade(LoopCase):
             self.assertNotIn("sub/other.txt", fh.read())
 
     def test_planner_invalid_twice_exit_3(self):
+        with open(self.cfgpath, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        raw["plan"] = {"judge": "off"}
+        with open(self.cfgpath, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
         self.set_scenario({"cursor": {GH: [{"result": "not json"}]}})
         code, doc, err = self.run_json("--type", "bugfix", "--difficulty", "medium")
         self.assertEqual(code, 3, err)

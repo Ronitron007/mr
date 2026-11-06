@@ -73,6 +73,7 @@ class _Ctx:
                      "grok_rung_min": 0.0, "units": 0.0}
         self.counters = {"attempts": 0, "claude_rungs": 0, "opus_rungs": 0}  # loop.count_after
         self.checklist = None
+        self.plan_rejected = False  # the plan was rejected twice and the task runs without one
         self.replans = self.n_plan = self.n_review = self.seq = 0
         self.shadow_judge = self.shadow_clf = None  # shadow.ShadowAnswer
         self.judge = None  # judge.Judge, set by _start_judge
@@ -580,6 +581,7 @@ def _task_record(c: _Ctx, ended: str) -> dict:
         "raw_dir": os.path.join(c.cfg.paths.home, "raw", task.id) + "/",
         "label": {"state": "provisional"}, "unknown": [],
         "files_src": judge_mod.files_by_src(getattr(d, "files", None) or {}),
+        **({"plan_rejected": True} if getattr(c, "plan_rejected", False) else {}),
         **_deprecated(c),
         **_intake_counts(c),
     }

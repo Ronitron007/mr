@@ -151,6 +151,7 @@ class Config:
     source: str
     droid: dict | None = None
     risk: dict | None = None
+    plan: dict | None = None
 
 
 def load(path: str | None = None, overrides: dict | None = None) -> Config:
@@ -207,6 +208,7 @@ def validate(raw: dict) -> list[str]:
     _blocks(raw)
     _acceptance_block(raw)
     _risk_block(raw)
+    _plan_block(raw)
     warnings.extend(_paths(raw))
     return warnings
 
@@ -450,6 +452,21 @@ def _risk_block(raw: dict) -> dict:
     out = {"high_isolation": "W5", **copy.deepcopy(block)}
     if not isinstance(out["high_isolation"], str) or out["high_isolation"] not in ("W4", "W5"):
         raise ConfigError("risk.high_isolation: must be W4 or W5")
+    return out
+
+
+def _plan_block(raw: dict) -> dict:
+    """Optional ``plan`` block, filled with the defaults. ``judge`` is on or off (YAML booleans are read as such)."""
+    block = raw.get("plan")
+    if block is None:
+        block = {}
+    if not isinstance(block, dict):
+        raise ConfigError("plan: expected a mapping")
+    out = {"judge": "on", **copy.deepcopy(block)}
+    if out["judge"] is True or out["judge"] is False:
+        out["judge"] = "on" if out["judge"] else "off"
+    if out["judge"] not in ("on", "off"):
+        raise ConfigError("plan.judge: must be on or off")
     return out
 
 
@@ -956,6 +973,7 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
         source=source,
         droid=_droid_copy(raw),
         risk=_risk_block(raw),
+        plan=_plan_block(raw),
     )
 
 
