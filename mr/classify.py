@@ -17,7 +17,9 @@ _PUSHBACK_TYPES = frozenset(
 )
 
 # Priority order for the detector set M (D-F5).
-_ORDER = ("off_track", "spec_suspect", "skipped", "tried_wrong")
+_ORDER = ("safety_violation", "scope_rejected", "scope_repair", "off_track", "spec_suspect", "skipped",
+          "tried_wrong")
+_HARD = frozenset({"safety_violation", "scope_rejected", "scope_repair", "off_track"})
 
 
 @dataclass(frozen=True)
@@ -47,6 +49,8 @@ class Inputs:
     C: str | None
     mr_result: dict | None
     prior_attempts: tuple[dict, ...]
+    D_status: str | None = None  # pass | flagged | violation; None when the scope judge is off
+    scope_verdict: str | None = None  # accept | repair | reject | unavailable
 
     @classmethod
     def from_dict(cls, d: dict) -> "Inputs":
@@ -67,6 +71,8 @@ class Inputs:
             C=d["C"],
             mr_result=d["mr_result"],
             prior_attempts=tuple(d["prior_attempts"]),
+            D_status=d.get("D_status"),
+            scope_verdict=d.get("scope_verdict"),
         )
 
 
@@ -187,7 +193,13 @@ def classify(i: Inputs) -> FailureRules:
     valid_pb = _valid_pushback(mr, s)
 
     fired: dict[str, list[str]] = {}
-    if not i.D:
+    if i.D_status == "violation":
+        fired["safety_violation"] = ["D: locked test edited or sensitive path outside the scope"]
+    if i.scope_verdict in ("reject", "unavailable"):
+        fired["scope_rejected"] = [f"scope judge {i.scope_verdict}"]
+    if i.scope_verdict == "repair":
+        fired["scope_repair"] = ["scope judge asked for a repair"]
+    if not i.D and i.D_status is None:
         fired["off_track"] = ["D failed"]
     if two is not None:
         prior = two["prior"]
@@ -228,7 +240,7 @@ def classify(i: Inputs) -> FailureRules:
         cls = "tried_wrong"
         evidence = ("no detector matched; fallback to tried_wrong",)
     confident = len(matched) == 1
-    hard = cls == "off_track" or (cls == "spec_suspect" and two is not None)
+    hard = cls in _HARD or (cls == "spec_suspect" and two is not None)
     return FailureRules(
         cls=cls, confident=confident, hard=hard, evidence=evidence, matched=matched
     )

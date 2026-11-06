@@ -479,8 +479,9 @@ def _check_judge_block(raw: dict) -> dict:
         block = {}
     if not isinstance(block, dict):
         raise ConfigError("check_judge: expected a mapping")
-    stock = {"plan_rung": "S", "plan_rung_strong": "S+"}
-    out = {**stock, "max_plan_calls": 2, "timeout_s": 300, **copy.deepcopy(block)}
+    stock = {"plan_rung": "S", "plan_rung_strong": "S+", "scope_rung": "S", "scope_rung_strong": "S+"}
+    out = {**stock, "scope": "on", "max_plan_calls": 2, "max_scope_calls": 3, "timeout_s": 300,
+           **copy.deepcopy(block)}
     rungs = raw.get("rungs") or {}
     for key, default in stock.items():
         code = out[key]
@@ -496,6 +497,11 @@ def _check_judge_block(raw: dict) -> dict:
     calls = out["max_plan_calls"]
     if isinstance(calls, bool) or not isinstance(calls, int) or not 1 <= calls <= 2:
         raise ConfigError("check_judge.max_plan_calls: must be an integer from 1 to 2")
+    if out["scope"] not in ("on", "off"):
+        raise ConfigError("check_judge.scope: must be on or off")
+    calls = out["max_scope_calls"]
+    if isinstance(calls, bool) or not isinstance(calls, int) or not 1 <= calls <= 3:
+        raise ConfigError("check_judge.max_scope_calls: must be an integer from 1 to 3")
     if not _pos_int(out["timeout_s"]):
         raise ConfigError("check_judge.timeout_s: must be a positive integer")
     return out

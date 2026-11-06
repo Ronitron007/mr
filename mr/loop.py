@@ -23,6 +23,7 @@ _BASE = {"G": "grok-4.7", "C25": "composer-2.5", "K": "kimi-k3",
          "S": "claude-sonnet-5-5", "S+": "claude-sonnet-5-5",
          "O": "claude-opus-5-5", "O+": "claude-opus-5-5"}
 CLAUDE_CAP, OPUS_CAP = 2, 1
+_RESET = frozenset({"off_track", "safety_violation", "scope_rejected"})  # the tree goes back before the next rung
 
 
 def base(rung: str) -> str:
@@ -94,13 +95,15 @@ def next_step(s: LoopState, *, caps=None, fallback=("G-x",)) -> Step:
         return _exit(exitcodes.HUMAN, "spec_suspect after re-plan")
     if s.attempts >= cap:
         return _exit(exitcodes.NOT_ACCEPTED, f"attempts cap {cap}")
-    reset = cls == "off_track"
+    if cls == "scope_repair":  # same rung, kept tree; the used-rung rule does not apply
+        return launch(cur, "scope repair: same rung")
+    reset = cls in _RESET
     if cls == "skipped":
         u = UP.get(cur)
         if u and base(cur) not in s.effort_up_used and ok(u):
             st = launch(u, f"effort-up {cur} -> {u}")
             return Step(st.action, st.rung, st.exit, False, st.rung == u, st.reason)
-    elif cls not in ("tried_wrong", "off_track"):
+    elif cls != "tried_wrong" and cls not in _RESET:
         raise ValueError(f"unknown cls: {cls!r}")
     for r in s.ladder:
         if ok(r):
@@ -114,9 +117,11 @@ def count_after(counters: dict, rung: str, *, kind: str) -> dict:
     out = {k: counters.get(k, 0) for k in ("attempts", "claude_rungs", "opus_rungs")}
     if kind in ("infra_retry", "planner", "reviewer"):
         return out
-    if kind not in ("implementer", "effort_up", "fallback"):
+    if kind not in ("implementer", "effort_up", "fallback", "scope_repair"):
         raise ValueError(f"unknown kind: {kind!r}")
     out["attempts"] += 1
+    if kind == "scope_repair":  # the same rung again: an attempt, not a new Claude rung
+        return out
     out["claude_rungs"] += rung in CLAUDE
     out["opus_rungs"] += rung in OPUS
     return out
@@ -132,7 +137,7 @@ def reviewer_for_grok(cfg) -> str:
 _PROMPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "implementer.v2.txt")
 _DIFFS = list(CAPS)  # trivial .. critical
 _HANDOFF = ("Previous rung: {rung}, class {cls}. The tree {tree}.\n"
-            "Failing acceptance tests: {a}\nNew hygiene failures: {h}\nScope problems: {d}\n"
+            "Failing acceptance tests: {a}\nNew hygiene failures: {h}\nScope problems: {d}\n{j}"
             "Reviewer findings: {c}\nPrevious patch (relative to the start of the task): {patch}\n")
 _MAX_FAILING_A, _MAX_NEW_H = 3, 10
 
@@ -347,22 +352,12 @@ class Found(NamedTuple):
     instructions: tuple = ()
 
 
-def _ask_plan_judge(c, res):
-    """One decision: up to two calls (the first invalid reply is retried). Logs the check_judge row.
-
-    Returns (Verdict | None, ref). A judge failure is a row with a null verdict; it defers nothing yet."""
-    cfg, task = c.cfg, c.task
-    rung = checkjudge.plan_rung(cfg, planner=res.rung, difficulty=c.d.difficulty,
-                                risk="high" if getattr(c, "high_risk", False) else c.d.risk)
-    state_ = checkjudge.build_state("plan", task.text, res.doc, res.errors,
-                                    signals={"repairs": res.repairs, "repo": planner._excerpt(task.repo)})
-    prompt = checkjudge.render(state_)
-    c.cj_calls = getattr(c, "cj_calls", 0) + 1
-    ref = f"cj-{task.id}-{c.cj_calls}"
+def _decide(c, rung: str, prompt: str):
+    """Up to two judge calls (the first invalid reply is retried). Returns (Verdict | None, status, calls made)."""
     verdict, status, made = None, "invalid", 0
     for _ in range(2):
         c.seq += 1
-        got = checkjudge.call(cfg, rung, prompt, tree=task.repo, task_id=task.id, attempt=c.seq)
+        got = checkjudge.call(c.cfg, rung, prompt, tree=c.task.repo, task_id=c.task.id, attempt=c.seq)
         if got.result is not None:
             made += 1
             pipeline.add_cost(c.cost, got.result, got.guarded)
@@ -373,12 +368,31 @@ def _ask_plan_judge(c, res):
         status = "ok" if verdict else "invalid"
         if verdict:
             break
-    pts = cfg.guard.est_seed.get(rung, 0.0) * made if made else None
+    return verdict, status, made
+
+
+def _log_decision(c, ref: str, check: str, findings, rung: str, verdict, status: str, made: int) -> None:
+    pts = c.cfg.guard.est_seed.get(rung, 0.0) * made if made else None
     c.log.append(checkjudge.record(
-        task=task.id, ref=ref, check="plan", findings=res.errors,
+        task=c.task.id, ref=ref, check=check, findings=findings,
         verdict=verdict.verdict if verdict else None, reason=verdict.reason if verdict else None,
-        instructions=verdict.instructions if verdict else [], rung=rung, judge_model=cfg.rungs[rung].model,
-        pts_est=pts, deferred=False, status=status))
+        instructions=verdict.instructions if verdict else [], rung=rung,
+        judge_model=c.cfg.rungs[rung].model, pts_est=pts, deferred=False, status=status))
+
+
+def _ask_plan_judge(c, res):
+    """One decision: up to two calls (the first invalid reply is retried). Logs the check_judge row.
+
+    Returns (Verdict | None, ref). A judge failure is a row with a null verdict; it defers nothing yet."""
+    cfg, task = c.cfg, c.task
+    rung = checkjudge.plan_rung(cfg, planner=res.rung, difficulty=c.d.difficulty,
+                                risk="high" if getattr(c, "high_risk", False) else c.d.risk)
+    state_ = checkjudge.build_state("plan", task.text, res.doc, res.errors,
+                                    signals={"repairs": res.repairs, "repo": planner._excerpt(task.repo)})
+    c.cj_calls = getattr(c, "cj_calls", 0) + 1
+    ref = f"cj-{task.id}-{c.cj_calls}"
+    verdict, status, made = _decide(c, rung, checkjudge.render(state_))
+    _log_decision(c, ref, "plan", res.errors, rung, verdict, status, made)
     return verdict, ref
 
 
@@ -542,6 +556,47 @@ def _replan(c) -> int | None:
     return code
 
 
+def _scope_on(c) -> bool:
+    return (getattr(c.cfg, "check_judge", None) or {}).get("scope") == "on"
+
+
+def _scope_plan(c, dres) -> dict:
+    if c.checklist:
+        sc = c.checklist["scope"]
+        return {"requirements": c.checklist["requirements"],
+                "scope": {"modify": list(sc["modify"]), "create": list(sc["create"])},
+                "est_loc": c.checklist["est_loc"]}
+    return {"named_files": list(router.scope_files(c.d)[0]), "est_loc": dres.est_loc}
+
+
+def _scope_decision(c, code: str, dres, patch: bytes, sig: dict):
+    """The scope judge on a flagged attempt whose H and A did not fail (one decision per attempt).
+
+    Returns (scope_verdict, Verdict | None, ref): accept | repair | reject, or unavailable when the judge cannot
+    decide or the per-task cap is used up (no call, no row). A second repair on the same rung counts as a reject."""
+    cfg, task = c.cfg, c.task
+    if getattr(c, "scope_calls", 0) >= cfg.check_judge["max_scope_calls"]:
+        return "unavailable", None, None
+    c.scope_calls = getattr(c, "scope_calls", 0) + 1
+    ref = f"cjs-{task.id}-{c.scope_calls}"
+    rung = checkjudge.scope_rung(cfg, implementer=code, difficulty=c.d.difficulty,
+                                 risk="high" if getattr(c, "high_risk", False) else c.d.risk)
+    state_ = checkjudge.build_state(
+        "scope", task.text, _scope_plan(c, dres), dres.findings,
+        signals={"H": "pass", "A": "pass" if sig["A"] else "not run"}, diff=patch.decode("utf-8", "replace"),
+        attempt={"rung": code, "n": c.counters["attempts"]})
+    verdict, status, made = _decide(c, rung, checkjudge.render(state_))
+    _log_decision(c, ref, "scope", dres.findings, rung, verdict, status, made)
+    if verdict is None:
+        return "unavailable", None, ref
+    if verdict.verdict == "repair":
+        repaired = getattr(c, "scope_repaired", ())
+        if code in repaired:
+            return "reject", verdict, ref
+        c.scope_repaired = {*repaired, code}
+    return verdict.verdict, verdict, ref
+
+
 def _prompt(c, handoff: str) -> str:
     task, name = c.task, os.path.basename(c.task.repo)
     goal, cmds = task.text, list((c.cfg.hygiene.get("commands") or {}).get(name) or [])
@@ -571,6 +626,7 @@ def _handoff(c, o: dict, cur: str, reset: bool) -> str:
         return "; ".join(items[:8]) + (f" (+{len(items) - 8} more)" if len(items) > 8 else "") if items else "-"
     text = _HANDOFF.format(
         rung=cur, cls=o["cls"], a=lst(o["A"]), h=lst(o["H"]), d=lst(o["D"]), c=lst(o["C"]),
+        j=f"Scope judge: {' '.join(o['J'])[:1500]}\n" if o.get("J") else "",
         patch=c.patch_path or "-",
         tree="was reset to the start of the task" if reset else "still holds the previous rung's changes")
     return text[:4000]
@@ -668,7 +724,8 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
                 dec, decision_text=_first_sentence(task.text),
                 focus=", ".join(sorted(getattr(c, "adv_sf", None) or ())) or "correctness of the change",
                 high_risk_paths=_scope_paths(c))
-    out = {"cls": None, "why": "", "keep": True, "A": [], "H": [], "D": [], "C": [], "stop": None, "D_warn": []}
+    out = {"cls": None, "why": "", "keep": True, "A": [], "H": [], "D": [], "C": [], "J": [], "stop": None,
+           "D_warn": []}
     rr, guarded, droid_try = run_rung(c, code, prompt, attempt)
     if denied(guarded, rr):
         c.in_rung = False
@@ -685,7 +742,7 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
     c.diff, c.in_rung = patches.numstat(patch), False
     sig = {"H": None, "D": None, "A": None, "C": None}
     infra, empty, hres, sa, rv = rr.is_error or rr.timed_out, not patch.strip(), None, None, None
-    aud = None
+    aud, sv, ref, d_kept = None, None, None, False
     if code == "S+A" and not viol:
         aud, out["adv_action"] = _advisor_audit(c, rr, attempt, repo)
     if viol:
@@ -696,12 +753,15 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
         trusted, judge_only = router.scope_files(d)
         dres = scope.scope(patch, checklist=c.checklist, difficulty=d.difficulty, files_named=tuple(trusted),
                            locked_files=c.locked, judge_files=tuple(judge_only))
-        c.files, sig["D"] = dres.files, dres.ok
+        judged = _scope_on(c)
+        # with the scope judge on only a violation stops H and A; findings wait for the judge
+        checkable = dres.status != "violation" if judged else dres.ok
+        c.files, sig["D"] = dres.files, dres.status if judged else dres.ok
         if not infra and not empty:
-            if dres.ok:
+            if checkable:
                 hres = hygiene.hygiene(repo, cfg, c.base_set, name, frozenset(c.locked))
                 sig["H"] = hres.ok
-            if dres.ok and c.checklist:
+            if checkable and c.checklist:
                 sa = acceptance.acceptance(repo, c.checklist, c.lockdoc, cfg=cfg, repo_name=name)
                 sig["A"] = sa.ok
         out["D"], out["D_warn"] = list(dres.reasons), list(dres.warnings)
@@ -709,11 +769,16 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
         if sa:
             out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing]
                         + [f"locked: {p}" for p in sa.lock_violations])
-        green = not (infra or empty) and bool(sig["D"] and sig["H"]) and sig["A"] is not False
+        green = not (infra or empty) and checkable and bool(sig["H"]) and sig["A"] is not False
+        if judged and green and dres.status == "flagged":
+            sv, jv, ref = _scope_decision(c, code, dres, patch, sig)
+            green = sv == "accept"
+            out["J"] = [jv.reason, *jv.instructions] if jv else ["scope judge unavailable"]
+        d_kept = (dres.status == "pass" or sv == "accept") if judged else bool(dres.ok)
         verdict = (aud.verdict or {}) if aud is not None and aud.relay_status == "ok" else {}
         adv_c = verdict.get("verdict") == "block" or (  # §6.3: C required on the relayed risks
             verdict.get("verdict") == "concern" and aud is not None and "unaddressed" in aud.violations)
-        if green and (d.needs_review or adv_c):  # C only for a candidate that already passes D, H and A
+        if green and (d.needs_review or adv_c or sv == "accept"):  # C only for a candidate that passes D, H and A
             rv, sig["C"] = _review(c, rung, patch,
                                    extra_reqs=_adv_review_reqs(verdict) if adv_c else None)
             out["C"] = [f"{it.get('id')}: {it.get('evidence')}" for it in rv.items if it.get("verdict") == "fail"]
@@ -722,17 +787,19 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
             out.update(stop=exitcodes.DEFERRED, why=f"required review {rv.reviewer} denied by the guard on a "
                        f"high-risk task; the patch is saved in {c.patch_path}")
         elif not green or (rv is not None and not rv.ok):
-            out.update(_classify(c, rung, rr, dres, hres, sa, rv, infra))
+            out.update(_classify(c, rung, rr, dres, hres, sa, rv, infra, judged, sv))
+            if out["J"]:
+                out["why"] += "; scope judge: " + out["J"][0]
         if code == "S+A":
             out.update(_adv_verdict(c, rr, aud, green, out["cls"]))
-    out["keep"] = (not viol and not infra and bool(sig["D"]) and len(out["A"]) <= _MAX_FAILING_A
-                   and len(out["H"]) <= _MAX_NEW_H)
+    out["keep"] = (not viol and not infra and (d_kept or out["cls"] == "scope_repair")
+                   and len(out["A"]) <= _MAX_FAILING_A and len(out["H"]) <= _MAX_NEW_H)
     c.rungs.append({"rung": code, "model": rung.model, "class": out["cls"], "signals": dict(sig),
                     "patch": c.patch_path, "failing": list(out["A"])})
     c.log.append(tag_record(pipeline.attempt_record(c, rung, code, rr, guarded, attempt, started, sig, out["cls"],
                                                     decision="stop" if out["stop"] is not None else None,
                                                     d_warnings=out["D_warn"]),
-                            rr, droid_try))
+                            rr, droid_try) | {"d_judge_ref": ref})
     return out
 
 
@@ -758,7 +825,7 @@ def _review(c, rung, patch: bytes, extra_reqs=None):
     return rv, rv.ok
 
 
-def _classify(c, rung, rr, dres, hres, sa, rv, infra: bool) -> dict:
+def _classify(c, rung, rr, dres, hres, sa, rv, infra: bool, judged: bool = False, sv: str | None = None) -> dict:
     """Failure class from the rules (classify.py) plus the prior-attempt book-keeping."""
     named = router.decision_files(c.d)
     groups = (list(c.checklist["files_map"].values()) if c.checklist
@@ -770,7 +837,8 @@ def _classify(c, rung, rr, dres, hres, sa, rv, infra: bool) -> dict:
         model=rung.model, rc=rr.rc, is_error=bool(rr.is_error), timed_out=rr.timed_out,
         wrapper_exit_75=False, hook_block=False, has_envelope=rr.has_envelope, diff_files=dres.files,
         diff_loc=dres.loc, mapped_files_touched=touched, H=h_ok, D=dres.ok, A_failing=failing,
-        C=rv.verdict if rv else None, mr_result=rr.mr_result, prior_attempts=tuple(c.prior))
+        C=rv.verdict if rv else None, mr_result=rr.mr_result, prior_attempts=tuple(c.prior),
+        D_status=dres.status if judged else None, scope_verdict=sv)
     rules = classify.classify(inputs)
     if not infra:
         c.prior.append({"model": rung.model, "A_failing": list(failing), "complete": classify.is_complete(inputs)})
@@ -849,7 +917,7 @@ def run_task(c) -> int:
             reset = True
         retry = o["cls"] == "infra" and step.rung == cur
         c.infra = c.infra + 1 if retry else 0
-        kind = "infra_retry" if retry else "implementer"
+        kind = "infra_retry" if retry else "scope_repair" if o["cls"] == "scope_repair" else "implementer"
         if step.effort_up:
             c.effort_up_used.append(base(cur))
         if o["cls"] != "guard_deny":

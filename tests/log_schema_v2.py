@@ -18,6 +18,7 @@ _OUTCOMES = frozenset(
         "unknown",
     }
 )
+_D_STATUS = ("pass", "flagged", "violation")
 _CHECK_STATUS = frozenset({"ok", "invalid", "cli_error", "guard_deny", "timeout"})
 _DROID_FALLBACK = frozenset({"credits", "auth", "transient"})
 _W_CODES = frozenset(f"W{i}" for i in range(8))
@@ -71,6 +72,11 @@ def _req_opt_int(rec: dict, key: str, problems: list[str]) -> None:
         problems.append(f"{key} must be int or None")
 
 
+def _req_opt_str_if_present(rec: dict, key: str, problems: list[str]) -> None:
+    if key in rec and rec[key] is not None and not isinstance(rec[key], str):
+        problems.append(f"{key} must be str or None")
+
+
 def _req_opt_str(rec: dict, key: str, problems: list[str]) -> None:
     if key not in rec:
         problems.append(f"missing {key}")
@@ -101,6 +107,9 @@ def _check_attempt(rec: dict, problems: list[str]) -> None:
     elif not _num(rec["wall_s"]):
         problems.append("wall_s must be number")
     _req_dict(rec, "signals", problems)
+    if isinstance(rec.get("signals"), dict) and rec["signals"].get("D") not in (None, True, False, *_D_STATUS):
+        problems.append("signals.D must be bool, pass, flagged, violation or None")
+    _req_opt_str_if_present(rec, "d_judge_ref", problems)
     _req_opt_str(rec, "decision", problems)
     _req_opt_str(rec, "failure_class", problems)
     _req_opt_str(rec, "isolation", problems)

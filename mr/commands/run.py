@@ -550,7 +550,8 @@ def _deprecated(c: _Ctx) -> dict:
 
 def _task_record(c: _Ctx, ended: str) -> dict:
     d, task, last = c.d, c.task, (c.rungs[-1] if c.rungs else None)
-    esc = {k: sum(r["class"] == k for r in c.rungs) for k in ("skipped", "tried_wrong", "spec_suspect", "off_track")}
+    esc = {k: sum(r["class"] == k for r in c.rungs) for k in (
+        "skipped", "tried_wrong", "spec_suspect", "off_track", "safety_violation", "scope_rejected", "scope_repair")}
     ran = c.used
     dirs: list[str] = []
     for f in c.files:

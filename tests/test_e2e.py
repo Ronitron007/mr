@@ -45,7 +45,7 @@ class TestScenarioMatrix(LoopCase):
         self.assertEqual((st["isolation"], st["next"], st["outcome"]), ("W7", "done", "accepted"))
         self.assertEqual([r["rung"] for r in st["rungs"]], ["G-l"])
         self.assertEqual(doc["rungs"], [{"rung": "G-l", "class": None,
-                                         "signals": {"H": True, "D": True, "A": None, "C": None}}])
+                                         "signals": {"H": True, "D": "pass", "A": None, "C": None}}])
         return code
 
     def _s2_medium_tried_wrong_then_sonnet(self):
@@ -58,7 +58,7 @@ class TestScenarioMatrix(LoopCase):
         st = self.state_of(doc["task"])
         self.assertEqual([r["rung"] for r in st["rungs"]], ["G-x", "S"])
         self.assertEqual([r["class"] for r in st["rungs"]], ["tried_wrong", None])
-        self.assertEqual(st["rungs"][1]["signals"], {"H": True, "D": True, "A": True, "C": True})
+        self.assertEqual(st["rungs"][1]["signals"], {"H": True, "D": "pass", "A": True, "C": True})
         self.assertEqual(st["used_rungs"], ["G-x", "S"])
         return code
 
@@ -73,6 +73,7 @@ class TestScenarioMatrix(LoopCase):
         return code
 
     def _s4_d_fail_reset_then_next_rung(self):
+        self.scope_judge_off()
         stray = {"sub/other.txt": "x\n"}
         self.set_scenario({"cursor": {
             GH: [{"result": json.dumps(PLAN)}],
@@ -255,6 +256,7 @@ class TestCrashState(_Subprocess, LoopCase):
 
     def _crash_after_rung2(self):
         """easy bugfix ladder [G-h, G-x, S]: G-h/G-x go off_track (reset), S sleeps; SIGKILL it."""
+        self.scope_judge_off()  # the judge would take the call that S needs to sleep
         marker = "ZZE2ECRASH" + uuid.uuid4().hex[:8]
         stray = [{"files": {"other/zzz.txt": "z\n"}}]
         self.set_scenario({"cursor": {GH: stray, GX: stray},

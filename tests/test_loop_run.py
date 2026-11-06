@@ -47,6 +47,14 @@ class LoopCase(RunCase):
         with open(self.cfgpath, "w", encoding="utf-8") as fh:
             json.dump(raw, fh)
 
+    def scope_judge_off(self):
+        """Keep the old rule for a test: any signal D reason is off_track, no scope judge."""
+        with open(self.cfgpath, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        raw["check_judge"] = {**raw.get("check_judge", {}), "scope": "off"}
+        with open(self.cfgpath, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
+
     def argv(self, *extra, text="fix typo in README.md"):
         return ["--config", self.cfgpath, "--json", "run", text, "--repo", self.repo, *extra]
 
@@ -90,7 +98,7 @@ class TestCascade(LoopCase):
         st = self.state_of(doc["task"])
         self.assertEqual([(r["rung"], r["class"]) for r in st["rungs"]], [("G-x", "tried_wrong"), ("S", None)])
         self.assertEqual(st["rungs"][0]["signals"]["A"], False)
-        self.assertEqual(st["rungs"][1]["signals"], {"H": True, "D": True, "A": True, "C": True})
+        self.assertEqual(st["rungs"][1]["signals"], {"H": True, "D": "pass", "A": True, "C": True})
         self.assertEqual((st["isolation"], st["attempts"], st["used_rungs"]), ("W7", 2, ["G-x", "S"]))
         self.assertEqual(st["checklist"]["goal"], "Add mul.")
         self.assertIn(TEST_PATH, self.prompts(GX)[0])  # locked file listed
@@ -187,6 +195,7 @@ class TestCascade(LoopCase):
         self.assertEqual(self.only_task()["esc"]["skipped"], 1)
 
     def test_off_track_resets_before_next_rung(self):
+        self.scope_judge_off()
         self.set_scenario({"cursor": {GL: [{"files": {"sub/other.txt": "x\n", **README}}],
                                       GM: [{"files": README}]}})
         code, doc, err = self.run_json("--type", "docs", "--difficulty", "easy")

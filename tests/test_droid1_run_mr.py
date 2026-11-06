@@ -114,6 +114,7 @@ class TestDroidFirst(DroidRunCase):
         self.assert_schema()
 
     def test_ordinary_droid_failure_escalates_without_fallback(self):
+        self.scope_judge_off()  # the scope judge would be a claude call
         self.set_scenario({'cursor': {GM: [{'files': README}]}})
         self.droid_steps({'files': {'other/zzz.txt': 'elsewhere'}})
         code, doc, err = self.run_json('--type', 'code', '--difficulty', 'easy', '--rung', 'S')

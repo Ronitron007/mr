@@ -7,7 +7,9 @@ from typing import NamedTuple
 
 from mr import redact, runners
 
-_PROMPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "check_judge.v1.txt")
+_PROMPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts")
+_PROMPT = os.path.join(_PROMPTS, "check_judge.v1.txt")
+_SCOPE_PROMPT = os.path.join(_PROMPTS, "check_judge_scope.v1.txt")
 KIND = "mr.check.v1"
 VERDICTS = ("accept", "repair", "reject")
 _KEYS = frozenset({"verdict", "reason", "instructions", "findings_ok"})
@@ -16,6 +18,7 @@ DIFF_CAP_BYTES = 8000 * 3  # 8000 tokens at 3 bytes per token
 _TRUNCATED = "\n[mr: diff truncated]"
 _STRONG_PLANNERS = frozenset({"O", "O+"})
 _HARD = frozenset({"hard", "critical"})
+_SONNET_AUTHORS = frozenset({"S", "S+", "S+A"})
 
 
 class Verdict(NamedTuple):
@@ -68,10 +71,13 @@ def _scrub(obj):
 
 
 def _scope_paths(plan) -> set[str]:
-    scope = plan.get("scope") if isinstance(plan, dict) else None
-    if not isinstance(scope, dict):
+    if not isinstance(plan, dict):
         return set()
-    return {p for key in ("modify", "create") for p in scope.get(key) or () if isinstance(p, str)}
+    named = {p for p in plan.get("named_files") or () if isinstance(p, str)}
+    scope = plan.get("scope")
+    if not isinstance(scope, dict):
+        return named
+    return named | {p for key in ("modify", "create") for p in scope.get(key) or () if isinstance(p, str)}
 
 
 def _capped_diff(diff: str, plan) -> str:
@@ -101,7 +107,7 @@ def build_state(check, task, plan, findings, *, signals=None, diff=None, attempt
 
 
 def render(state: dict) -> str:
-    with open(_PROMPT, encoding="utf-8") as fh:
+    with open(_SCOPE_PROMPT if state.get("check") == "scope" else _PROMPT, encoding="utf-8") as fh:
         template = fh.read()
     return template.replace("<<STATE>>", json.dumps(state, ensure_ascii=False, indent=1))
 
@@ -112,6 +118,14 @@ def plan_rung(cfg, *, planner: str, difficulty: str, risk: str) -> str:
     if planner in _STRONG_PLANNERS or difficulty in _HARD or risk == "high":
         return block["plan_rung_strong"]
     return block["plan_rung"]
+
+
+def scope_rung(cfg, *, implementer: str, difficulty: str, risk: str) -> str:
+    """S by default; S+ (a fresh session) when a Sonnet rung wrote the change or the work is hard, critical or high risk."""
+    block = cfg.check_judge
+    if implementer in _SONNET_AUTHORS or difficulty in _HARD or risk == "high":
+        return block["scope_rung_strong"]
+    return block["scope_rung"]
 
 
 def call(cfg, rung: str, prompt: str, *, tree: str, task_id: str, attempt: int) -> Call:
