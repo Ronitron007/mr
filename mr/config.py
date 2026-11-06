@@ -152,6 +152,7 @@ class Config:
     droid: dict | None = None
     risk: dict | None = None
     plan: dict | None = None
+    check_judge: dict | None = None
 
 
 def load(path: str | None = None, overrides: dict | None = None) -> Config:
@@ -209,6 +210,7 @@ def validate(raw: dict) -> list[str]:
     _acceptance_block(raw)
     _risk_block(raw)
     _plan_block(raw)
+    _check_judge_block(raw)
     warnings.extend(_paths(raw))
     return warnings
 
@@ -467,6 +469,35 @@ def _plan_block(raw: dict) -> dict:
         out["judge"] = "on" if out["judge"] else "off"
     if out["judge"] not in ("on", "off"):
         raise ConfigError("plan.judge: must be on or off")
+    return out
+
+
+def _check_judge_block(raw: dict) -> dict:
+    """Optional ``check_judge`` block, filled with the defaults. Its rungs are Sonnet on path max at high or xhigh."""
+    block = raw.get("check_judge")
+    if block is None:
+        block = {}
+    if not isinstance(block, dict):
+        raise ConfigError("check_judge: expected a mapping")
+    stock = {"plan_rung": "S", "plan_rung_strong": "S+"}
+    out = {**stock, "max_plan_calls": 2, "timeout_s": 300, **copy.deepcopy(block)}
+    rungs = raw.get("rungs") or {}
+    for key, default in stock.items():
+        code = out[key]
+        spec = rungs.get(code) if isinstance(code, str) else None
+        if not isinstance(spec, dict):
+            raise ConfigError(f"check_judge.{key}: rung {code!r} not defined")
+        # a stock rung with a low effort is raised by the rung clamp (with a warning); a rung picked here is not
+        low = code != default and spec.get("effort") not in ("high", "xhigh")
+        if (spec.get("path") != "max" or not fnmatch.fnmatchcase(spec.get("model") or "", "claude-sonnet-*")
+                or low or spec.get("advisor")):
+            raise ConfigError(f"check_judge.{key}: {code!r} must be a claude-sonnet-* rung on path max at "
+                              "effort high or xhigh, without an advisor")
+    calls = out["max_plan_calls"]
+    if isinstance(calls, bool) or not isinstance(calls, int) or not 1 <= calls <= 2:
+        raise ConfigError("check_judge.max_plan_calls: must be an integer from 1 to 2")
+    if not _pos_int(out["timeout_s"]):
+        raise ConfigError("check_judge.timeout_s: must be a positive integer")
     return out
 
 
@@ -974,6 +1005,7 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
         droid=_droid_copy(raw),
         risk=_risk_block(raw),
         plan=_plan_block(raw),
+        check_judge=_check_judge_block(raw),
     )
 
 

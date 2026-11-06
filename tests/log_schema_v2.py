@@ -18,6 +18,7 @@ _OUTCOMES = frozenset(
         "unknown",
     }
 )
+_CHECK_STATUS = frozenset({"ok", "invalid", "cli_error", "guard_deny", "timeout"})
 _DROID_FALLBACK = frozenset({"credits", "auth", "transient"})
 _W_CODES = frozenset(f"W{i}" for i in range(8))
 
@@ -226,6 +227,21 @@ def check(record: dict) -> list[str]:
                 problems.append(f"missing {key}")
         if not isinstance(record.get("violations", []), list):
             problems.append("violations must be list")
+    elif role == "check_judge":  # spec 8A: plan and scope check judge decisions
+        for key in ("ref", "rung", "judge_model"):
+            _req_str(record, key, problems)
+        _req_opt_str(record, "reason", problems)
+        _req_opt_num(record, "pts_est", problems)
+        _req_bool(record, "deferred", problems)
+        if record.get("check") not in ("plan", "scope"):
+            problems.append("check must be plan or scope")
+        if record.get("verdict") not in (None, "accept", "repair", "reject"):
+            problems.append("verdict must be accept, repair, reject or None")
+        if record.get("status") not in _CHECK_STATUS:
+            problems.append("invalid status")
+        for key in ("findings", "instructions"):
+            if not isinstance(record.get(key), list) or not all(isinstance(i, str) for i in record[key]):
+                problems.append(f"{key} must be list of str")
     elif role in ("judge", "classifier"):  # judge-spec §7.4 shadow call records
         for key in ("ref", "status", "mode") + (("use", "qset", "model_req") if role == "judge" else ("model",)):
             _req_str(record, key, problems)

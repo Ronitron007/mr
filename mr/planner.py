@@ -40,8 +40,9 @@ class PlanResult(NamedTuple):
     notes: tuple = ()  # why an attempt left the configured rung (Claude denied)
     repairs: list = []  # auto_repair entries of the attempt that decided the result
     retry_errors: list = []  # the errors the second attempt was given
-    status: str = "rejected"  # valid | repaired | rejected
+    status: str = "rejected"  # valid | repaired | let_through | rejected
     infra: bool = False  # both attempts timed out or gave no JSON document
+    doc: dict | None = None  # the last parsed and auto-repaired document, valid or not
 
 
 _NO_DOC = "planner output is not one JSON document"
@@ -590,6 +591,124 @@ def _delete_tests(tree: str, rels: list[str]) -> None:
             pass
 
 
+def _settle(doc: dict, *, cfg, tree: str, task_id: str, runner: str, repo_name: str,
+            allow_uncovered=frozenset()) -> list[str]:
+    """Validate, write the tests, run them on base. A clean document gets checklist.json and tests.lock.
+
+    ``allow_uncovered`` are requirement ids a judge let stay without a test. Returns the remaining errors."""
+    errors = [err for err in validate(doc, repo_root=tree, runner=runner)
+              if not (err.startswith("covered: ") and err.split()[1] in allow_uncovered)]
+    if errors:
+        return errors
+    written = _write_tests(tree, doc)
+    run = acceptance.run_named(tree, [item["path"] for item in doc["tests"]], runner, cfg.timeouts.acceptance_s)
+    errors = acceptance.base_errors(doc, run)
+    if errors:
+        _delete_tests(tree, written)
+        return errors
+    _write_json(os.path.join(state.task_dir(cfg.paths.home, task_id), "checklist.json"), doc)
+    acceptance.lock(tree, doc, cfg, repo_name, task_id=task_id)
+    return []
+
+
+def check_doc(doc: dict, *, cfg, tree: str, task_id: str, allow_uncovered=frozenset(), delete=()):
+    """A planner attempt for a document the planner did not just write: auto_repair, validate, tests on base.
+
+    ``delete`` are test files to remove from the tree first. Returns (doc, repairs, errors)."""
+    repo_name = os.path.basename(os.path.abspath(tree).rstrip(os.sep))
+    runner = acceptance.runner_for(cfg, repo_name)
+    _delete_tests(tree, list(delete))
+    doc, repairs = auto_repair(doc, repo_root=tree, runner=runner)
+    return doc, repairs, _settle(doc, cfg=cfg, tree=tree, task_id=task_id, runner=runner, repo_name=repo_name,
+                                 allow_uncovered=allow_uncovered)
+
+
+_EDIT_MOVE = re.compile(r"(move|add) `?([^`\s]+)`? to (modify|create)")
+_EDIT_DROP = re.compile(r"drop `?([^`\s]+)`? from scope")
+_ERR_TEST = re.compile(r"(.+?)::(.+?) (?:passed on base|did not fail at test level \(.*\))")
+_ERR_UNCOVERED = re.compile(r"covered: (R\d+) is not covered")
+_ERR_PATH = re.compile(r"modify: (.+) does not exist|create: (.+) already exists|path: (.+) is outside the repo"
+                       r"|files_map: (.+) is outside scope")
+
+
+def parse_edit(text: str):
+    """(kind, path, list) for a mechanical judge instruction, else None."""
+    text = text.strip()
+    if text == "renumber":
+        return ("renumber", None, None)
+    if m := _EDIT_MOVE.fullmatch(text):
+        return (m.group(1), m.group(2), m.group(3))
+    if m := _EDIT_DROP.fullmatch(text):
+        return ("drop", m.group(1), None)
+    return None
+
+
+def _without(items, path: str) -> list:
+    rel = _norm_rel(path)
+    return [p for p in items if p != path and (rel is None or _norm_rel(p) != rel)]
+
+
+def apply_edits(doc: dict, edits) -> dict:
+    """The document with the mechanical edits applied (renumbering is auto_repair's job). Input untouched."""
+    out = copy.deepcopy(doc)
+    lists = _scope_lists(out)
+    if not lists:
+        return out
+    scope = out["scope"]
+    for kind, path, where in edits:
+        if kind == "renumber":
+            continue
+        if kind == "drop":
+            for key in ("modify", "create"):
+                scope[key] = _without(scope[key], path)
+            files_map = out.get("files_map")
+            for key, paths in (files_map.items() if isinstance(files_map, dict) else ()):
+                files_map[key] = _without(paths, path) if _str_list(paths) else paths
+            continue
+        if kind == "move":
+            for key in ("modify", "create"):
+                scope[key] = _without(scope[key], path)
+        if path not in scope[where]:
+            scope[where].append(path)
+    return out
+
+
+def relax(doc: dict, errors) -> tuple[dict, frozenset, list[str]]:
+    """The document with exactly the items ``errors`` name let through (spec 8A.3 step 3).
+
+    A test that passes on base leaves its acceptance item and the lock; an item left with no test is dropped; a test
+    file left with no locked test is removed from tests and scope.create; a scope error drops its path. Returns
+    (new doc, requirement ids allowed to stay uncovered, test files removed). Input untouched."""
+    out = copy.deepcopy(doc)
+    drop, paths, named = set(), set(), set()
+    for err in errors:
+        if m := _ERR_TEST.fullmatch(err):
+            drop.add((m.group(1), m.group(2)))
+        elif m := _ERR_UNCOVERED.fullmatch(err):
+            named.add(m.group(1))
+        elif m := _ERR_PATH.fullmatch(err):
+            paths.add(next(g for g in m.groups() if g))
+    try:
+        covered = {rid for item in out["acceptance"] for rid in item["covers"]}
+        emptied = []
+        for item in out["acceptance"]:
+            names = [n for n in item["tests"] if (item["file"], n) not in drop]
+            if len(names) != len(item["tests"]) and not names:
+                emptied.append(item["id"])
+            item["tests"] = names
+        out["acceptance"] = [i for i in out["acceptance"] if i["id"] not in emptied]
+        live = {item["file"] for item in out["acceptance"]}
+        gone = sorted({file for file, _ in drop} - live)
+        out["tests"] = [t for t in out["tests"] if t["path"] not in gone]
+        paths |= set(gone)
+        for path in paths:
+            out = apply_edits(out, [("drop", path, None)])
+        lost = covered - {rid for item in out["acceptance"] for rid in item["covers"]}
+    except (AttributeError, KeyError, TypeError):  # a shape validate reports; do not half-relax it
+        return copy.deepcopy(doc), frozenset(), []
+    return out, frozenset(named | lost), gone
+
+
 def _with_errors(prompt: str, errors: list[str]) -> str:
     lines = "\n".join(f"- {err}" for err in errors)
     return (
@@ -631,6 +750,7 @@ def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | 
     repairs: list[dict] = []
     retry_errors: list[str] = []
     no_doc: list[bool] = []  # per attempt: timed out or no JSON document
+    last_doc = None
     used = primary
     for n in (1, 2):
         prompt = base if n == 1 and not errors else _with_errors(base, errors)
@@ -664,20 +784,11 @@ def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | 
             continue
         no_doc.append(False)
         doc, repairs = auto_repair(doc, repo_root=tree, runner=runner)
-        errors = validate(doc, repo_root=tree, runner=runner)
+        last_doc = doc
+        errors = _settle(doc, cfg=cfg, tree=tree, task_id=task_id, runner=runner, repo_name=repo_name)
         if errors:
             continue
-        written = _write_tests(tree, doc)
-        run = acceptance.run_named(
-            tree, [item["path"] for item in doc["tests"]], runner, cfg.timeouts.acceptance_s,
-        )
-        errors = acceptance.base_errors(doc, run)
-        if errors:
-            _delete_tests(tree, written)
-            continue
-        _write_json(os.path.join(state.task_dir(cfg.paths.home, task_id), "checklist.json"), doc)
-        acceptance.lock(tree, doc, cfg, repo_name, task_id=task_id)
         return PlanResult(True, doc, patches.take_reset_tree(tree), [], n, raws, used, tuple(spend), tuple(notes),
-                          repairs, retry_errors, "repaired" if repairs else "valid", False)
+                          repairs, retry_errors, "repaired" if repairs else "valid", False, doc)
     return PlanResult(False, None, None, errors, len(raws), raws, used, tuple(spend), tuple(notes),
-                      repairs, retry_errors, "rejected", len(no_doc) == 2 and all(no_doc))
+                      repairs, retry_errors, "rejected", len(no_doc) == 2 and all(no_doc), last_doc)

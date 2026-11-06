@@ -19,6 +19,10 @@ NOTE = 'plan rejected twice; running without a plan'
 MEDIUM = ('--type', 'bugfix', '--difficulty', 'medium')
 
 
+def verdict(kind, reason):
+    return {'result': json.dumps({'verdict': kind, 'reason': reason, 'instructions': [], 'findings_ok': []})}
+
+
 def plan_doc(content=None, extra_create=()):
     doc = copy.deepcopy(PLAN)
     doc['scope']['create'] += list(extra_create)
@@ -68,11 +72,12 @@ class TestPlanJudgeOn(PlanCase):
 
     def test_two_invalid_plans_then_one_stronger_plan(self):
         self.set_scenario({'cursor': {GH: [{'result': plan_doc(PASSING)}], GX: [mul('*')]},
-                           'claude': {SONNET: [{'result': json.dumps(PLAN)}, {'result': REVIEW_PASS}]}})
+                           'claude': {SONNET: [verdict('reject', 'The plan locks a passing test.'),
+                                               {'result': json.dumps(PLAN)}, {'result': REVIEW_PASS}]}})
         code, doc, text = self.run_raw()
         self.assertEqual(code, 0, text)
-        self.assertEqual(self.models()[:3], [GH, GH, SONNET])
-        self.assertIn('passed on base', self.prompts(SONNET)[0])
+        self.assertEqual(self.models()[:4], [GH, GH, SONNET, SONNET])
+        self.assertIn('passed on base', self.prompts(SONNET)[1])
         rows = self.records('planner')
         self.assertEqual(self.statuses(), ['rejected', 'valid'])
         self.assertEqual([r['rung'] for r in rows], ['G-h', 'S'])
@@ -84,7 +89,9 @@ class TestPlanJudgeOn(PlanCase):
     def test_third_invalid_plan_runs_without_a_plan_and_s_plus_review(self):
         bad = plan_doc(PASSING)
         self.set_scenario({'cursor': {GH: [{'result': bad}], GX: [{'files': README}]},
-                           'claude': {SONNET: [{'result': bad}, {'result': REVIEW_PASS}]}})
+                           'claude': {SONNET: [verdict('reject', 'No usable plan.'), {'result': bad}, {'result': bad},
+                                               verdict('reject', 'Still no usable plan.'),
+                                               {'result': REVIEW_PASS}]}})
         code, doc, text = self.run_raw()
         self.assertNotEqual(code, 3, text)
         self.assertEqual(code, 0, text)

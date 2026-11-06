@@ -9,8 +9,9 @@ import sys
 import time
 from dataclasses import dataclass, replace
 from datetime import datetime
+from typing import NamedTuple
 
-from mr import (acceptance, advisor, classify, droid, exitcodes, guard, hygiene, isolation, patches,
+from mr import (acceptance, advisor, checkjudge, classify, droid, exitcodes, guard, hygiene, isolation, patches,
                 pipeline, planner, review, router, runners, scope, state)
 from mr.log import IST, now_ist, read as _read_runs
 
@@ -333,15 +334,95 @@ def _light(c, role: str, code: str, started: str, t0: float, signals: dict, cls:
 
 _STRONGER = {"G-h": "S", "S": "O", "S+": "O", "O": "O+", "O+": "O+"}
 PLAN_REJECTED = "plan rejected twice; running without a plan"
+NO_TEST = "(no locked test covers this; check the patch against it directly) "
 
 
-def _plan_findings(c, res) -> str:
-    """What to do with a plan that is still invalid after two attempts. The plan judge hooks in here."""
-    return "replan"
+class Found(NamedTuple):
+    """What the plan judge decided. kind: let_through | repaired (res is a valid plan), again (res is the
+    mechanically repaired but still invalid plan), instruct (planner reruns with the instructions), replan."""
+    kind: str
+    res: object
+    ref: str | None = None
+    reason: str | None = None
+    instructions: tuple = ()
+
+
+def _ask_plan_judge(c, res):
+    """One decision: up to two calls (the first invalid reply is retried). Logs the check_judge row.
+
+    Returns (Verdict | None, ref). A judge failure is a row with a null verdict; it defers nothing yet."""
+    cfg, task = c.cfg, c.task
+    rung = checkjudge.plan_rung(cfg, planner=res.rung, difficulty=c.d.difficulty,
+                                risk="high" if getattr(c, "high_risk", False) else c.d.risk)
+    state_ = checkjudge.build_state("plan", task.text, res.doc, res.errors,
+                                    signals={"repairs": res.repairs, "repo": planner._excerpt(task.repo)})
+    prompt = checkjudge.render(state_)
+    c.cj_calls = getattr(c, "cj_calls", 0) + 1
+    ref = f"cj-{task.id}-{c.cj_calls}"
+    verdict, status, made = None, "invalid", 0
+    for _ in range(2):
+        c.seq += 1
+        got = checkjudge.call(cfg, rung, prompt, tree=task.repo, task_id=task.id, attempt=c.seq)
+        if got.result is not None:
+            made += 1
+            pipeline.add_cost(c.cost, got.result, got.guarded)
+        status = got.status
+        if status != "ok":
+            break
+        verdict = checkjudge.parse(got.text)
+        status = "ok" if verdict else "invalid"
+        if verdict:
+            break
+    pts = cfg.guard.est_seed.get(rung, 0.0) * made if made else None
+    c.log.append(checkjudge.record(
+        task=task.id, ref=ref, check="plan", findings=res.errors,
+        verdict=verdict.verdict if verdict else None, reason=verdict.reason if verdict else None,
+        instructions=verdict.instructions if verdict else [], rung=rung, judge_model=cfg.rungs[rung].model,
+        pts_est=pts, deferred=False, status=status))
+    return verdict, ref
+
+
+def _settled(c, res, doc, kind: str, *, allow=frozenset(), delete=()):
+    """Run a judge-edited document like a planner attempt: a valid PlanResult (status ``kind``) or the invalid one."""
+    task = c.task
+    doc, repairs, errors = planner.check_doc(doc, cfg=c.cfg, tree=task.repo, task_id=task.id,
+                                             allow_uncovered=allow, delete=delete)
+    if errors:
+        return res._replace(errors=errors, doc=doc, repairs=list(res.repairs) + repairs, attempts=0)
+    return res._replace(ok=True, checklist=doc, reset_tree=patches.take_reset_tree(task.repo), errors=[], attempts=0,
+                        status=kind, doc=doc, repairs=list(res.repairs) + repairs)
+
+
+def _plan_findings(c, res) -> Found:
+    """A plan still invalid after two attempts goes to the plan judge (at most check_judge.max_plan_calls per task)."""
+    block = getattr(c.cfg, "check_judge", None)
+    if block is None or res.doc is None or getattr(c, "cj_calls", 0) >= block["max_plan_calls"]:
+        return Found("replan", res)
+    verdict, ref = _ask_plan_judge(c, res)
+    if verdict is None:
+        return Found("replan", res, ref)
+    c.plan_judge_reason = verdict.reason
+    lost = Found("replan", res, ref, verdict.reason)
+    if verdict.verdict == "reject":
+        return lost
+    if verdict.verdict == "accept":
+        doc, allow, gone = planner.relax(res.doc, res.errors)
+        if not any(item.get("tests") for item in doc.get("acceptance") or ()):
+            return lost  # nothing left to lock: let the stronger planner write tests
+        got = _settled(c, res, doc, "let_through", allow=allow, delete=gone)
+        if not got.ok:
+            return lost
+        c.uncovered_reqs = tuple(sorted(allow))
+        return Found("let_through", got, ref, verdict.reason)
+    edits = [planner.parse_edit(text) for text in verdict.instructions]
+    if not edits or None in edits:
+        return Found("instruct", res, ref, verdict.reason, tuple(verdict.instructions or [verdict.reason]))
+    got = _settled(c, res, planner.apply_edits(res.doc, edits), "repaired")
+    return Found("repaired" if got.ok else "again", got, ref, verdict.reason)
 
 
 def _plan_call(c, rung, prior_errors=None):
-    """One planner.plan call (up to two attempts) and its planner row."""
+    """One planner.plan call (up to two attempts). Returns (result, planner row); the caller logs the row."""
     cfg, task = c.cfg, c.task
     c.seq += 1
     started, t0 = now_ist(), time.time()
@@ -355,27 +436,65 @@ def _plan_call(c, rung, prior_errors=None):
                  "invalid_plan" if old_way and not res.ok else None, ok=res.ok,
                  guarded=_row_guarded(cfg, res.rung, res.spend))
     row.update(status=res.status, repairs=res.repairs, retry_errors=res.retry_errors)
-    c.log.append(row)
-    return res
+    return res, row
+
+
+def _recover(c, res, row):
+    """Judge a plan that is still invalid; one stronger re-plan allowed. Logs every planner row after its decision.
+
+    Returns the last PlanResult: valid, or invalid (plan-less run, or infra when the planner is unreachable)."""
+    stronger = False
+    while True:
+        if res.ok or res.infra:
+            c.log.append(row)
+            if res.ok or stronger:
+                return res
+            found = Found("replan", res)  # nothing to judge: no document came back
+        else:
+            found = _plan_findings(c, res)
+            if found.ref:
+                row["plan_judge_ref"] = found.ref
+        if found.kind in ("let_through", "repaired"):
+            row.update(status=found.kind, is_error=False, decision="accept", repairs=found.res.repairs)
+            c.log.append(row)
+            return found.res
+        if found.kind == "again":
+            res = found.res
+            continue
+        if not (res.ok or res.infra):
+            c.log.append(row)
+        if found.kind == "instruct":
+            res, row = _plan_call(c, res.rung, res.errors + list(found.instructions))
+        elif stronger:
+            return res
+        else:
+            stronger = True
+            prior = None if res.infra else res.errors + ([f"plan judge: {found.reason}"] if found.reason else [])
+            res, row = _plan_call(c, _STRONGER.get(res.rung, "S"), prior)
 
 
 def _plan(c) -> int | None:
     """Planner (cfg.planner.rungs by difficulty): checklist, locked tests, red on base, new reset_tree.
 
     Not a ladder rung: a Claude planner call costs points but does not count to claude/opus rungs.
-    With plan.judge off, exit 3 if invalid twice. With it on, a plan still invalid after two attempts gets one
-    re-plan on the stronger planner, then the task runs without a plan; an unreachable planner defers (75).
+    With plan.judge off, exit 3 if invalid twice. With it on, a plan still invalid after two attempts goes to the
+    plan judge (accept, repair or reject); a reject, a judge failure or an unfixed repair gets one re-plan on the
+    stronger planner, then the task runs without a plan; an unreachable planner defers (75).
     """
     cfg, task = c.cfg, c.task
-    res = _plan_call(c, c.d.planner)
-    if not res.ok and (getattr(cfg, "plan", None) or {}).get("judge", "on") == "on":
-        if res.infra or _plan_findings(c, res) == "replan":
-            res = _plan_call(c, _STRONGER.get(res.rung, "S"), None if res.infra else res.errors)
+    c.uncovered_reqs = ()
+    res, row = _plan_call(c, c.d.planner)
+    if (getattr(cfg, "plan", None) or {}).get("judge", "on") == "on":
+        res = _recover(c, res, row)
         if res.infra:
             return c.stop(exitcodes.DEFERRED, f"planner unavailable ({'; '.join(res.errors[:2])}); "
                                               "state is saved, run it again later")
         if not res.ok:
             return _plan_less(c)
+        if res.status == "let_through":
+            c.d = replace(c.d, needs_review=True, required_review=router.at_least(c.d.required_review, "S+"))
+    else:
+        c.log.append(row)
     if not res.ok:
         raw = os.path.join(state.task_dir(cfg.paths.home, task.id), "planner-a*.txt")
         return c.stop(exitcodes.HUMAN, f"planner gave no valid checklist twice ({'; '.join(res.errors[:3])}); "
@@ -393,6 +512,8 @@ def _plan(c) -> int | None:
 def _plan_less(c) -> None:
     """No usable plan: no checklist, the no-checklist D limits, and a required review of at least S+."""
     print(PLAN_REJECTED, file=sys.stderr)
+    if getattr(c, "plan_judge_reason", None):
+        print(f"plan judge: {c.plan_judge_reason}", file=sys.stderr)
     c.plan_rejected = True
     c.checklist, c.locked, c.lockdoc = None, (), None
     c.d = replace(c.d, needs_review=True, required_review=router.at_least(c.d.required_review, "S+"))
@@ -620,6 +741,9 @@ def _review(c, rung, patch: bytes, extra_reqs=None):
     c.seq += 1
     started, t0 = now_ist(), time.time()
     reqs = c.checklist["requirements"] if c.checklist else None
+    untested = getattr(c, "uncovered_reqs", ())
+    if reqs and untested:  # the plan judge let these through without a locked test
+        reqs = [dict(r, text=NO_TEST + r["text"]) if r["id"] in untested else r for r in reqs]
     if extra_reqs:
         reqs = list(reqs or []) + list(extra_reqs)
     rv = review.review(patch.decode("utf-8", "replace"), reqs,
