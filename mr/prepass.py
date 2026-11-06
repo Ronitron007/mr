@@ -230,7 +230,7 @@ def _cross_layer(files: Sequence[str]) -> int:
 @dataclass(frozen=True)
 class Features:
     type_hits: dict[str, int]
-    files_named: tuple[str, ...]
+    files: tuple[str, ...]
     grep_hit_files: int
     risk_tags: frozenset[str]
     risk_floor: str
@@ -255,7 +255,7 @@ def _assemble(text: str, files: tuple[str, ...], grep_hits: int) -> Features:
     amb = ambiguity(text, body, n)
     return Features(
         type_hits=hits,
-        files_named=files,
+        files=files,
         grep_hit_files=grep_hits,
         risk_tags=tags,
         risk_floor=risk,
@@ -295,6 +295,7 @@ def _grep_hit_files(repo: str | None, files: tuple[str, ...]) -> int:
     return sum(1 for path in files if path in found)
 
 
-def extract(task: Task, repo: str | None) -> Features:
-    files = tuple(task.files_named)
+def extract(task: Task, repo: str | None, files: Sequence[str] | None = None) -> Features:
+    """Features for the task over ``files`` (the decision files); None means the task's hint files."""
+    files = tuple(task.hint_files if files is None else files)
     return _assemble(task.text, files, _grep_hit_files(repo, files))

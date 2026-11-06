@@ -201,29 +201,16 @@ def _risk(g, rules, readings, text_only: set[str], floor: int, tags_floor: int) 
     return _Pick(_RISK[idx], src, ans if src == "judge" else None)
 
 
-def _candidates_files(facts) -> tuple[list[dict], list[dict]]:
-    change: list[dict] = []
-    new: list[dict] = []
-    for c in facts.candidates:
-        src = "named" if "named" in c.why else "hint" if "hint" in c.why else None
-        if src is None:
-            continue
-        if c.exists:
-            change.append({"path": c.path, "src": src})
-        elif src == "named":
-            new.append({"path": c.path, "src": src})
-    return change, new
-
-
 def _outside(path: str) -> bool:
     return not path or path.startswith(("/", "~")) or ".." in path.split("/")
 
 
 def _files(g, facts, readings) -> dict:
-    change, new = _candidates_files(facts)
+    base = router.files_from_facts(facts)
+    change, new = base["change"], base["new"]
     reading = (readings or {}).get("files")
     if not isinstance(reading, dict):
-        return {"change": change, "new": new, "partial": True}
+        return base
     if "files" not in g.pins:
         conf = reading.get("conf") or {}
         existing = {c.path for c in facts.candidates if c.exists}
@@ -237,7 +224,7 @@ def _files(g, facts, readings) -> dict:
             if path not in existing and path not in listed and not _outside(path):
                 new.append({"path": path, "src": "judge"})
                 listed.add(path)
-    return {"change": change, "new": new, "partial": reading.get("complete") is not True}
+    return {"change": change, "new": new, "read": [], "partial": reading.get("complete") is not True}
 
 
 def _passing(g, reading: dict, conf: dict, key: str) -> list[str]:
@@ -321,7 +308,7 @@ def merge(task, facts, rules: router.Decision, readings: dict | None, cfg, *, so
                       or rules.required_review is not None),
         planner=("O+" if rules.planner and difficulty.value == "critical" else rules.planner),
         reasons=tuple(dict.fromkeys(reasons)), sources=sources,
-        files={"change": list(files["change"]), "new": list(files["new"]), "partial": files["partial"]},
+        files={k: list(v) if isinstance(v, list) else v for k, v in files.items()},
         risk_evidence=tuple(evidence))
     _check(decision, task, cfg, path_tags=path_tags, risk_floor=risk_floor, diff_floor=diff_floor,
            strong=strong, pins=g.pins)

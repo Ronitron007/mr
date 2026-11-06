@@ -52,7 +52,7 @@ def _text(data: bytes | None) -> str:
 
 
 def _scope_level(features) -> int:
-    n = len(features.files_named)
+    n = len(features.files)
     return 0 if n <= 1 else 1 if n <= 3 else 2 if n <= 6 else 3 if n <= 12 else 4
 
 
@@ -246,7 +246,7 @@ class Judge:
             return (self._questions, self._qset_sha, built,
                     {"risk": features.risk_floor, "scope": _scope_level(features)}, None)
         if facts is None:
-            facts = facts_mod.build_facts(task.text, task.repo, hints=task.files_named)
+            facts = facts_mod.build_facts(task.text, task.repo, hints=task.hint_files)
         questions = qmod.expand_v2(self._questions, facts)
         rules = {"type": features.type, "difficulty": features.difficulty_est, "risk": features.risk_floor}
         built = state_mod.build_route_state_v2(task, facts, self.cfg, name, questions, rules=rules)

@@ -39,15 +39,29 @@ class Params:
     pin: tuple[str, ...] = ()
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, init=False)
 class Task:
     id: str
     text: str
     repo: str
     base: str
     params: Params
-    files_named: tuple[str, ...]
+    hint_files: tuple[str, ...]
     source: str
+    deprecated: tuple[str, ...]
+
+    def __init__(self, id, text, repo, base, params, hint_files=None, source="cli", deprecated=(), *,
+                 files_named=None):
+        """``files_named`` is the old keyword for ``hint_files`` (kept for one release)."""
+        given = hint_files if hint_files is not None else files_named
+        for name, value in (("id", id), ("text", text), ("repo", repo), ("base", base), ("params", params),
+                            ("hint_files", tuple(given or ())), ("source", source),
+                            ("deprecated", tuple(deprecated))):
+            object.__setattr__(self, name, value)
+
+    @property
+    def files_named(self) -> tuple[str, ...]:
+        return self.hint_files
 
     @property
     def fingerprint(self) -> str:
@@ -133,15 +147,25 @@ def _git_out(repo: str, *args: str) -> str:
     return out
 
 
-def _files_named(data: dict | None, text: str) -> tuple[str, ...]:
-    if data is not None and "files_named" in data and data["files_named"] is not None:
-        named = data["files_named"]
-        if not isinstance(named, list) or not all(isinstance(item, str) for item in named):
-            raise TaskError("files_named must be a list of strings")
-        return tuple(named)
-    from mr.prepass import path_tokens
+def _string_list(raw: object, label: str) -> tuple[str, ...]:
+    if not isinstance(raw, list) or not all(isinstance(item, str) for item in raw):
+        raise TaskError(f"{label} must be a list of strings")
+    return tuple(raw)
 
-    return path_tokens(text)
+
+def _hint_files(data: dict | None) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """(hints.files, deprecated field names) from a task file. ``files_named`` is the old name for hints.files."""
+    if data is None:
+        return (), ()
+    hints = data.get("hints")
+    if hints is not None and not isinstance(hints, dict):
+        raise TaskError("task file hints must be an object")
+    old = data.get("files_named")
+    deprecated = ("files_named",) if old is not None else ()
+    listed = _string_list(old, "files_named") if old is not None else ()
+    if hints is not None and hints.get("files") is not None:
+        return _string_list(hints["files"], "hints.files"), deprecated
+    return listed, deprecated
 
 
 def load_task(
@@ -172,14 +196,16 @@ def load_task(
         raise TaskError("repo missing")
     top = _git_out(chosen, "rev-parse", "--show-toplevel")
     base = _git_out(top, "rev-parse", "HEAD")
+    hint_files, deprecated = _hint_files(data)
     return Task(
         id=new_task_id(text, time.time(), data_dir() if home is None else home),
         text=text,
         repo=top,
         base=base,
         params=params,
-        files_named=_files_named(data, text),
+        hint_files=hint_files,
         source=source,
+        deprecated=deprecated,
     )
 
 
@@ -188,8 +214,10 @@ def make_task(
     repo: str,
     base: str,
     params: Params,
-    files_named: tuple[str, ...] | None = None,
+    hint_files: tuple[str, ...] | None = None,
     source: str = "cli",
+    *,
+    files_named: tuple[str, ...] | None = None,
 ) -> Task:
     """Build a Task without git. ``load_task`` is unchanged."""
     if not isinstance(text, str) or text.strip() == "":
@@ -200,18 +228,14 @@ def make_task(
         raise TaskError("repo missing")
     if not isinstance(base, str) or base.strip() == "":
         raise TaskError("base missing")
-    if files_named is None:
-        from mr.prepass import path_tokens
-
-        named = path_tokens(text)
-    else:
-        named = tuple(files_named)
+    if hint_files is None:
+        hint_files = files_named
     return Task(
         id=new_task_id(text, time.time(), data_dir()),
         text=text,
         repo=repo,
         base=base,
         params=params,
-        files_named=named,
+        hint_files=tuple(hint_files or ()),
         source=source,
     )

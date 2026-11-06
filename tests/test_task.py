@@ -127,7 +127,7 @@ class TestTask(unittest.TestCase):
             with open(bare_path, "w", encoding="utf-8") as handle:
                 json.dump(bare, handle)
             named = load_task(None, bare_path, Params(), None, home=home)
-            self.assertEqual(named.files_named, ("src/a.ts", "README.md"))
+            self.assertEqual(named.files_named, ())
             self.assertEqual(named.source, "file")
 
             null_files = {
@@ -139,7 +139,7 @@ class TestTask(unittest.TestCase):
             with open(null_path, "w", encoding="utf-8") as handle:
                 json.dump(null_files, handle)
             from_text = load_task(None, null_path, Params(), None, home=home)
-            self.assertEqual(from_text.files_named, ("README.md",))
+            self.assertEqual(from_text.files_named, ())
 
             exact = load_task("y" * 8000, None, Params(), repo, home=home)
             self.assertEqual(len(exact.text), 8000)

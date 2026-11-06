@@ -25,6 +25,8 @@ from mr.log import Log, now_ist
 from mr.task import Params, TaskError, load_task, normalise
 
 _L0 = "mr run --once needs --rung CODE"
+DEPRECATED_FIELD = "files_named"
+DEPRECATED_LINE = "files_named is deprecated; use hints.files"
 _PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "prompts", "implementer.v1.txt")
 _OUTCOME = {
@@ -264,12 +266,15 @@ def run(args) -> int:
     try:
         task = load_task(args.task, args.task_file, _params(args), args.repo or os.getcwd(),
                          home=cfg.paths.home)
-        feats = prepass.extract(task, task.repo)
-        found = facts.try_build(task.text, task.repo, task.files_named)
+        found = facts.try_build(task.text, task.repo, task.hint_files)
+        feats = prepass.extract(task, task.repo,
+                                router.decision_files(router.files_from_facts(found, task.hint_files)))
         rules = decision = router.decide(task, feats, cfg, facts=found)
     except (TaskError, router.RouteError) as exc:
         _say(str(exc))
         return ec.USAGE
+    if DEPRECATED_FIELD in task.deprecated:
+        _say(DEPRECATED_LINE)
     intake, parts = _intake(args, cfg, task, feats, rules, found)
     if intake is not None:
         decision = router.map_design(intake.decision, cfg, task.params)
@@ -433,7 +438,7 @@ def _body(c: _Ctx) -> int:
     rung = cfg.rungs[c.rung]
     with open(_PROMPT, encoding="utf-8") as fh:
         template = fh.read()
-    scope_text = "\n".join(f"- {p}" for p in task.files_named) or pipeline.NO_FILES
+    scope_text = "\n".join(f"- {p}" for p in router.decision_files(d)) or pipeline.NO_FILES
     prompt = template.format(goal=task.text, scope=scope_text, locked_files="(none)",
                              handoff="(first attempt)", task_id=task.id) + pipeline.deps_line(c)
     before = isolation.snapshot(repo)
@@ -452,15 +457,17 @@ def _body(c: _Ctx) -> int:
     infra = rr.is_error or rr.timed_out
     empty = not patch.strip()
     sig = {"H": None, "D": None, "A": None, "C": None}
-    cls, why = None, ""
+    cls, why, warnings = None, "", []
     if viol:
         cls = "isolation_violation"
         why = (f"isolation violation: {viol}; in {c.iso} mr cannot restore refs, so the rung's "
                f"change to the repo was left as is (HEAD {after.head}, branch {after.branch}); "
                f"the tree edits are saved in {c.patch_path}")
     else:
-        dres = scope.scope(patch, checklist=None, difficulty=d.difficulty, files_named=task.files_named)
-        c.files = dres.files
+        trusted, judge_only = router.scope_files(d)
+        dres = scope.scope(patch, checklist=None, difficulty=d.difficulty, files_named=tuple(trusted),
+                           judge_files=tuple(judge_only))
+        c.files, warnings = dres.files, list(dres.warnings)
         sig["D"] = dres.ok
         if not infra and dres.ok and not empty:
             hres = hygiene.hygiene(repo, cfg, base_set, os.path.basename(repo))
@@ -481,8 +488,8 @@ def _body(c: _Ctx) -> int:
     pipeline.add_cost(c.cost, rr, guarded)
     c.rungs.append({"rung": c.rung, "model": rung.model, "class": cls, "signals": dict(sig),
                     "patch": c.patch_path})
-    c.log.append(loop.tag_record(pipeline.attempt_record(c, rung, c.rung, rr, guarded, 1, attempt_started, sig, cls),
-                                 rr, droid_try))
+    c.log.append(loop.tag_record(pipeline.attempt_record(c, rung, c.rung, rr, guarded, 1, attempt_started, sig, cls,
+                                                    d_warnings=warnings), rr, droid_try))
     c.save_state("finish")
 
     if viol:
@@ -533,7 +540,11 @@ def _feature_hash(feats) -> str | None:
 def _intake_counts(c: _Ctx) -> dict:
     if getattr(c, "intake", None) is None:
         return {}
-    return {"judge_overrides": len(c.intake.overrides), "files_src": dict(c.intake.files)}
+    return {"judge_overrides": len(c.intake.overrides)}
+
+
+def _deprecated(c: _Ctx) -> dict:
+    return {"deprecated_field": DEPRECATED_FIELD} if DEPRECATED_FIELD in getattr(c.task, "deprecated", ()) else {}
 
 
 def _task_record(c: _Ctx, ended: str) -> dict:
@@ -568,6 +579,8 @@ def _task_record(c: _Ctx, ended: str) -> dict:
         "commit": c.commit[:12] if c.commit else None,
         "raw_dir": os.path.join(c.cfg.paths.home, "raw", task.id) + "/",
         "label": {"state": "provisional"}, "unknown": [],
+        "files_src": judge_mod.files_by_src(getattr(d, "files", None) or {}),
+        **_deprecated(c),
         **_intake_counts(c),
     }
 

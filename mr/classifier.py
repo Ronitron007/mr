@@ -147,7 +147,7 @@ def allowed_codes(cfg) -> list[str]:
 def build_prompt(task, features, cfg, task_text: str) -> str:
     vals = {
         "REPO": os.path.basename(task.repo.rstrip("/")), "SCHEMA": SCHEMA, "CODES": ",".join(allowed_codes(cfg)),
-        "TASK": task_text, "FILES": json.dumps(list(features.files_named)),
+        "TASK": task_text, "FILES": json.dumps(list(features.files)),
         "RISKS": json.dumps(sorted(features.risk_tags)),
     }
     with open(_TEMPLATE, encoding="utf-8") as fh:

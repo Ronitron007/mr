@@ -45,7 +45,7 @@ class TestPrepass(unittest.TestCase):
                 self.assertEqual(feat.difficulty_floor, expect["difficulty_floor"])
                 self.assertEqual(feat.confident, expect["confident"])
                 self.assertEqual(feat.grep_hit_files, 0)
-                self.assertEqual(feat.n_files, len(feat.files_named))
+                self.assertEqual(feat.n_files, len(feat.files))
 
     def test_no_content_reads(self) -> None:
         calls: list[list[str]] = []

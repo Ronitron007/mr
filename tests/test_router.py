@@ -132,7 +132,7 @@ def _task(params: Params) -> Task:
 def _features(**overrides) -> Features:
     base = dict(
         type_hits={},
-        files_named=(),
+        files=(),
         grep_hit_files=0,
         risk_tags=frozenset(),
         risk_floor="low",
@@ -328,7 +328,7 @@ class TestRouter(unittest.TestCase):
 
     def test_design_trigger_and_cascade_override(self) -> None:
         features = _features(
-            files_named=("src/auth/login.ts",),
+            files=("src/auth/login.ts",),
             risk_tags=frozenset({"auth"}),
             risk_floor="high",
             difficulty_floor="hard",

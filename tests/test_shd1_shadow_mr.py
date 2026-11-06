@@ -67,7 +67,7 @@ def _task():
 
 
 def _features(**kw):
-    base = dict(type_hits={}, files_named=(), grep_hit_files=0, risk_tags=frozenset(), risk_floor="low",
+    base = dict(type_hits={}, files=(), grep_hit_files=0, risk_tags=frozenset(), risk_floor="low",
                 difficulty_floor="trivial", difficulty_est="trivial", cross_layer=0, public_interface=False,
                 new_module=False, ambiguity=0, judgment_keywords=False, confident=True, type="code", n_files=0)
     base.update(kw)

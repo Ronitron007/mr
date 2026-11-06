@@ -12,7 +12,7 @@ from mr.config import ConfigError, load
 from mr.gitmeta import read_head
 from mr.judge import Judge, judge as judge_mod
 from mr.prepass import extract
-from mr.router import MAPPED, Decision, RouteError, decide, map_design
+from mr.router import MAPPED, Decision, RouteError, decide, decision_files, files_from_facts, map_design
 from mr.task import Params, TaskError, load_task, make_task
 
 _DESIGN = "design route not built; re-run with --route cascade or plan by hand"
@@ -33,8 +33,8 @@ def run(args) -> int:
         else:
             task = load_task(None, task_file, _params(args), repo, home=cfg.paths.home)
         repo = task.repo
-        features = extract(task, None)
-        found = facts.try_build(task.text, repo, task.files_named)
+        found = facts.try_build(task.text, repo, task.hint_files)
+        features = extract(task, None, decision_files(files_from_facts(found, task.hint_files)))
         decision = decide(task, features, cfg, facts=found)
         jmode = shadow.judge_mode(getattr(args, "judge", None), cfg.judge or {}) if models else "off"
         mode = shadow.effective_mode(getattr(args, "classifier", None), cfg.classifier or {}) if models else "off"

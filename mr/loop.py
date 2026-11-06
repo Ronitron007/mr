@@ -11,7 +11,7 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from mr import (acceptance, advisor, classify, droid, exitcodes, guard, hygiene, isolation, patches,
-                pipeline, planner, review, runners, scope, state)
+                pipeline, planner, review, router, runners, scope, state)
 from mr.log import IST, now_ist, read as _read_runs
 
 CAPS = {"trivial": 3, "easy": 3, "medium": 4, "hard": 4, "critical": 4}
@@ -146,8 +146,8 @@ def _first_sentence(text: str) -> str:
 
 
 def _scope_paths(c) -> list[str]:
-    """files_named plus the checklist scope paths, de-duplicated (advisor sf_tags / high_risk_paths)."""
-    paths = list(c.task.files_named)
+    """The decision files plus the checklist scope paths, de-duplicated (advisor sf_tags / high_risk_paths)."""
+    paths = router.decision_files(c.d)
     if c.checklist:
         sc = c.checklist["scope"]
         paths += [p for p in sc["modify"] + sc["create"] if p not in paths]
@@ -341,7 +341,7 @@ def _plan(c) -> int | None:
     c.seq += 1
     started, t0 = now_ist(), time.time()
     res = planner.plan(task, cfg=cfg, tree=task.repo, task_id=task.id, attempt=c.seq,
-                       difficulty=c.d.difficulty, rung=c.d.planner)
+                       difficulty=c.d.difficulty, rung=c.d.planner, files=c.d.files)
     c.n_plan += res.attempts
     for rr, guarded in res.spend:
         pipeline.add_cost(c.cost, rr, guarded)
@@ -353,6 +353,7 @@ def _plan(c) -> int | None:
         return c.stop(exitcodes.HUMAN, f"planner gave no valid checklist twice ({'; '.join(res.errors[:3])}); "
                                        f"raw outputs: {raw}")
     c.checklist, c.reset_tree = res.checklist, res.reset_tree
+    c.d = replace(c.d, files=router.files_from_plan(res.checklist))
     c.locked = tuple(t["path"] for t in res.checklist["tests"])
     with open(os.path.join(state.task_dir(cfg.paths.home, task.id), "tests.lock"), encoding="utf-8") as fh:
         c.lockdoc = json.load(fh)
@@ -394,7 +395,7 @@ def _prompt(c, handoff: str) -> str:
         else:
             cmds.append("npx vitest run " + " ".join(c.locked))
     else:
-        own = list(task.files_named)
+        own = router.decision_files(c.d)
     with open(_PROMPT, encoding="utf-8") as fh:
         template = fh.read()
     return template.format(
@@ -508,7 +509,7 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
                 dec, decision_text=_first_sentence(task.text),
                 focus=", ".join(sorted(getattr(c, "adv_sf", None) or ())) or "correctness of the change",
                 high_risk_paths=_scope_paths(c))
-    out = {"cls": None, "why": "", "keep": True, "A": [], "H": [], "D": [], "C": [], "stop": None}
+    out = {"cls": None, "why": "", "keep": True, "A": [], "H": [], "D": [], "C": [], "stop": None, "D_warn": []}
     rr, guarded, droid_try = run_rung(c, code, prompt, attempt)
     if denied(guarded, rr):
         c.in_rung = False
@@ -533,8 +534,9 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
             f"isolation violation: {viol}; in {c.iso} mr cannot restore refs, so the rung's change to "
             f"the repo was left as is; the tree edits are saved in {c.patch_path}"))
     else:
-        dres = scope.scope(patch, checklist=c.checklist, difficulty=d.difficulty,
-                           files_named=task.files_named, locked_files=c.locked)
+        trusted, judge_only = router.scope_files(d)
+        dres = scope.scope(patch, checklist=c.checklist, difficulty=d.difficulty, files_named=tuple(trusted),
+                           locked_files=c.locked, judge_files=tuple(judge_only))
         c.files, sig["D"] = dres.files, dres.ok
         if not infra and not empty:
             if dres.ok:
@@ -543,7 +545,7 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
             if dres.ok and c.checklist:
                 sa = acceptance.acceptance(repo, c.checklist, c.lockdoc, cfg=cfg, repo_name=name)
                 sig["A"] = sa.ok
-        out["D"] = list(dres.reasons)
+        out["D"], out["D_warn"] = list(dres.reasons), list(dres.warnings)
         out["H"] = list(hres.new_failures) if hres else []
         if sa:
             out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing]
@@ -569,7 +571,8 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
     c.rungs.append({"rung": code, "model": rung.model, "class": out["cls"], "signals": dict(sig),
                     "patch": c.patch_path, "failing": list(out["A"])})
     c.log.append(tag_record(pipeline.attempt_record(c, rung, code, rr, guarded, attempt, started, sig, out["cls"],
-                                                    decision="stop" if out["stop"] is not None else None),
+                                                    decision="stop" if out["stop"] is not None else None,
+                                                    d_warnings=out["D_warn"]),
                             rr, droid_try))
     return out
 
@@ -595,9 +598,9 @@ def _review(c, rung, patch: bytes, extra_reqs=None):
 
 def _classify(c, rung, rr, dres, hres, sa, rv, infra: bool) -> dict:
     """Failure class from the rules (classify.py) plus the prior-attempt book-keeping."""
-    task = c.task
+    named = router.decision_files(c.d)
     groups = (list(c.checklist["files_map"].values()) if c.checklist
-              else [list(task.files_named)] if task.files_named else [])
+              else [named] if named else [])
     touched = all(any(f in dres.files for f in g) for g in groups) if groups else bool(dres.files)
     failing = tuple(f"{f}::{t}" for f, t in sa.failed + sa.missing) if sa else ()
     h_ok = hres.ok if hres else True

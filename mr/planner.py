@@ -39,7 +39,19 @@ class PlanResult(NamedTuple):
     notes: tuple = ()  # why an attempt left the configured rung (Claude denied)
 
 
+RESOLVER_LINE = "These files come from mr's resolver and the judge; add any file the change needs."
+
+
+def _files_text(files: dict) -> str:
+    """A decision files dict as prompt lines, each with where mr got the path."""
+    lines = [f"- {e['path']} ({e['src']})" for e in files.get("change") or ()]
+    lines += [f"- {e['path']} ({e['src']}, new)" for e in files.get("new") or ()]
+    return "\n".join(lines or ["(none)"]) + "\n" + RESOLVER_LINE
+
+
 def _as_text(value) -> str:
+    if isinstance(value, dict):
+        return _files_text(value)
     if isinstance(value, str):
         return value
     if isinstance(value, (list, tuple)):
@@ -47,8 +59,8 @@ def _as_text(value) -> str:
     return "" if value is None else str(value)
 
 
-def build_prompt(task_text, files_named, repo_tree_excerpt, task_id, runner) -> str:
-    """Format the vitest or unittest planner template."""
+def build_prompt(task_text, files, repo_tree_excerpt, task_id, runner) -> str:
+    """Format the vitest or unittest planner template. ``files`` is a decision files dict, a string or a list."""
     name = "planner.v1.txt" if runner == "vitest" else "planner.unittest.v1.txt"
     if runner not in ("vitest", "unittest"):
         raise ValueError(f"unknown runner {runner!r}")
@@ -56,7 +68,7 @@ def build_prompt(task_text, files_named, repo_tree_excerpt, task_id, runner) -> 
         template = handle.read()
     return template.format(
         task_text=_as_text(task_text),
-        files_named=_as_text(files_named),
+        files_named=_as_text(files),
         repo_tree_excerpt=_as_text(repo_tree_excerpt),
         task_id=_as_text(task_id),
     )
@@ -447,13 +459,15 @@ def _run(code: str, prompt: str, tree: str, *, cfg, task_id: str, attempt: int):
 
 
 def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | None = None,
-         rung: str | None = None) -> PlanResult:
+         rung: str | None = None, files: dict | None = None) -> PlanResult:
     """Run the planner rung for the task's difficulty, or ``rung`` when given. Invalid output is retried once,
-    then ok=False."""
+    then ok=False. ``files`` is the decision files dict; None means the task's hint files."""
     repo_name = os.path.basename(os.path.abspath(tree).rstrip(os.sep))
     runner = acceptance.runner_for(cfg, repo_name)
     primary = rung or cfg.planner.rungs[difficulty or getattr(task, "difficulty", None) or "medium"]
-    base = build_prompt(task.text, task.files_named, _excerpt(tree), task_id, runner)
+    if files is None:
+        files = {"change": [{"path": p, "src": "hint"} for p in task.hint_files], "new": []}
+    base = build_prompt(task.text, files, _excerpt(tree), task_id, runner)
     raws: list[str] = []
     errors: list[str] = []
     spend: list = []

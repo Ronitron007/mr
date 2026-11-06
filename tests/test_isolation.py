@@ -187,7 +187,7 @@ class TestInputs(Base):
         )
         feats = Features(
             type_hits={"refactor": 1},
-            files_named=named,
+            files=named,
             grep_hit_files=0,
             risk_tags=frozenset(),
             risk_floor="low",
@@ -222,6 +222,7 @@ class TestInputs(Base):
                 "risk": "rule",
                 "ladder": "rule",
             },
+            files={"change": [{"path": p, "src": "named"} for p in named], "new": [], "read": [], "partial": True},
         )
         ctx = SimpleNamespace(
             args=SimpleNamespace(experiment=False, route="cascade"),

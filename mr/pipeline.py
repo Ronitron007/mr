@@ -23,7 +23,7 @@ def _inputs(c, tags, other_writer: bool):
     return isolation.compute_inputs(
         c.task.repo, ro=False, risk=d.risk, difficulty=d.difficulty, risk_tags=d.risk_tags,
         experiment=bool(c.args.experiment), other_writer=other_writer, cfg=c.cfg,
-        est_files=len(c.task.files_named), path_tags=tags)
+        est_files=len(router.decision_files(d)), path_tags=tags)
 
 
 def deps_line(c) -> str:
@@ -149,7 +149,7 @@ def add_cost(cost: dict, rr, guarded) -> None:
 
 
 def attempt_record(c, rung, code: str, rr, guarded, attempt: int, started: str, sig: dict,
-                   cls: str | None, *, decision: str | None = None) -> dict:
+                   cls: str | None, *, decision: str | None = None, d_warnings=()) -> dict:
     """The §7.4 implementer attempt record for one rung run."""
     usage = rr.usage or {}
     delta, pre, post = call_points(guarded)
@@ -165,6 +165,7 @@ def attempt_record(c, rung, code: str, rr, guarded, attempt: int, started: str, 
         "cache_tok": tok(usage, "cacheReadTokens", "cache_read_input_tokens"),
         "usd_equiv": rr.usd_equiv, "pts_pre": pre, "pts_post": post,
         "claude_pts": delta, "diff": dict(c.diff), "mr_result": mr_result, "signals": dict(sig),
+        "d_warnings": list(d_warnings),
         "decision": decision or ("accept" if cls is None else "stop"), "failure_class": cls,
         "failure_source": "rules" if cls else None, "isolation": c.iso, "spec_id": None,
         "judge_ref": None, "patch": c.patch_path,

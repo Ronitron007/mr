@@ -43,7 +43,7 @@ def _exists_in_repo(repo: str, rel: str) -> bool:
 def build_route_state(task, features, cfg, repo_name: str, questions: dict, env=None) -> BuiltState:
     judge = getattr(cfg, "judge", None) or {}
     stack = (judge.get("stacks") or {}).get(repo_name)
-    named = list(features.files_named[:FILES_NAMED_MAX])
+    named = list(features.files[:FILES_NAMED_MAX])
     raw = {
         "kind": "mr.route.v1",
         "task": task.text[:TASK_CHARS],
@@ -97,7 +97,7 @@ def build_route_state(task, features, cfg, repo_name: str, questions: dict, env=
 
 
 def build_route_state_v2(task, facts, cfg, repo_name: str, questions: dict, env=None, rules=None) -> BuiltState:
-    """The mr.route.v2 state: the facts stage output only. It never reads task.params or task.files_named."""
+    """The mr.route.v2 state: the facts stage output only. It never reads task.params or the task hint files."""
     judge = getattr(cfg, "judge", None) or {}
     stack = (judge.get("stacks") or {}).get(repo_name)
     rules = rules or {}

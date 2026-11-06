@@ -161,8 +161,10 @@ class RouteFactsTest(RunCase):
             self.assertIn('facts', doc, text)
             self.assertIsInstance(doc.get('risk_evidence'), list, text)
             task = make_task(text, self.repo, base, Params())
-            feats = prepass.extract(task, None)
-            want = _plain(dataclasses.asdict(router.decide(task, feats, cfg)))
+            found = _facts_mod().try_build(text, self.repo, task.hint_files)
+            names = router.decision_files(router.files_from_facts(found, task.hint_files))
+            feats = prepass.extract(task, None, names)
+            want = _plain(dataclasses.asdict(router.decide(task, feats, cfg, facts=found)))
             self.assertEqual(doc['decision'], json.loads(json.dumps(want)), text)
             self.assertEqual(doc['features'], json.loads(json.dumps(_plain(dataclasses.asdict(feats)))), text)
 

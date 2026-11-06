@@ -36,6 +36,7 @@ class SignalD:
     files: tuple[str, ...]
     loc: int
     est_loc: int
+    warnings: tuple[str, ...] = ()
 
 
 def _glob(pat: str) -> re.Pattern[str]:
@@ -109,8 +110,11 @@ def changed_files(patch: bytes) -> list[tuple[str, int, int]]:
 
 def scope(patch: bytes, *, checklist: dict | None, difficulty: str,
           files_named: tuple[str, ...], locked_files: tuple[str, ...] = (),
-          forbidden: tuple[str, ...] = ()) -> SignalD:
-    """One threshold. Every breach is recorded; ok is true only when the list is empty."""
+          forbidden: tuple[str, ...] = (), judge_files: tuple[str, ...] = ()) -> SignalD:
+    """One threshold. Every breach is recorded; ok is true only when the list is empty.
+
+    Without a checklist ``files_named`` holds the trusted paths (named, hint or planner). A changed path outside
+    them that only the judge picked (``judge_files``) is a warning, not a breach."""
     rows = changed_files(patch)
     files = tuple(dict.fromkeys(path for path, _, _ in rows))
     loc = sum(added + deleted for path, added, deleted in rows if not _is_test_path(path))
@@ -126,7 +130,9 @@ def scope(patch: bytes, *, checklist: dict | None, difficulty: str,
         est, cap = NO_CHECKLIST_LIMITS[difficulty]
         modify, allowed = set(), set()
     named_set, dirs, locked = set(named), {os.path.dirname(p) for p in named}, set(locked_files)
+    judged = set(judge_files)
     reasons: list[str] = []
+    warnings: list[str] = []
     for path in files:
         if path in locked:
             reasons.append(f"locked test edited: {path}")
@@ -139,7 +145,9 @@ def scope(patch: bytes, *, checklist: dict | None, difficulty: str,
                 reasons.append(f"dependency/config file: {path}")
             continue
         in_scope = (not named) or path in named_set or os.path.dirname(path) in dirs
-        if not in_scope:
+        if not in_scope and path in judged:
+            warnings.append(f"outside the named files, picked by the judge: {path}")
+        elif not in_scope:
             reasons.append(f"out of scope: {path}")
         if path not in named_set and any(_glob(pat).match(path) for pat in SENSITIVE):
             reasons.append(f"sensitive path: {path}")
@@ -149,4 +157,4 @@ def scope(patch: bytes, *, checklist: dict | None, difficulty: str,
         reasons.append(f"too many files: {len(files)} > {cap}")
     if loc > 2 * est:
         reasons.append("too large: loc > 2×est")
-    return SignalD(not reasons, tuple(reasons), files, loc, est)
+    return SignalD(not reasons, tuple(reasons), files, loc, est, tuple(warnings))

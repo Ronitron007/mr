@@ -16,6 +16,7 @@ _OPUS = frozenset({"O", "O+"})
 _KIMI_DROP = frozenset({"K-h", "K-x"})
 MAPPED = "design_mapped_to_cascade"
 STRENGTH = ("S", "S+", "O", "O+")
+_TRUSTED_SRC = frozenset({"named", "hint", "planner"})
 
 
 class InvariantError(Exception):
@@ -48,12 +49,57 @@ class Decision:
     required_review: str | None = None
 
 
+def files_from_facts(facts, hints=()) -> dict:
+    """Decision files from the facts candidates that the text names or a hint gives (named wins over hint).
+
+    Without a Facts (the build failed) the hints stand in as the files to change."""
+    change: list[dict] = []
+    new: list[dict] = []
+    if isinstance(facts, facts_mod.Facts):
+        for c in facts.candidates:
+            src = "named" if "named" in c.why else "hint" if "hint" in c.why else None
+            if src is not None:
+                (change if c.exists else new).append({"path": c.path, "src": src})
+    else:
+        change = [{"path": p, "src": "hint"} for p in dict.fromkeys(hints)]
+    return {"change": change, "new": new, "read": [], "partial": True}
+
+
+def files_from_plan(checklist: dict) -> dict:
+    """Decision files after a valid plan: the planner's scope is the final scope."""
+    block = checklist.get("scope") or {}
+    return {"change": [{"path": p, "src": "planner"} for p in block.get("modify") or ()],
+            "new": [{"path": p, "src": "planner"} for p in block.get("create") or ()],
+            "read": [], "partial": False}
+
+
+def _entries(d) -> list[dict]:
+    files = d if isinstance(d, dict) else getattr(d, "files", None)
+    if not isinstance(files, dict):
+        return []
+    return [e for key in ("change", "new") for e in files.get(key) or ()]
+
+
+def decision_files(d) -> list[str]:
+    """Paths to change then paths to create, de-duplicated, order kept. ``d`` is a Decision, anything with
+    ``.files``, or a files dict."""
+    return list(dict.fromkeys(e["path"] for e in _entries(d)))
+
+
+def scope_files(d) -> tuple[list[str], list[str]]:
+    """(trusted, judge_only): paths from the text, a hint or the planner, and paths only the judge picked."""
+    entries = _entries(d)
+    trusted = list(dict.fromkeys(e["path"] for e in entries if e["src"] in _TRUSTED_SRC))
+    judged = [e["path"] for e in entries if e["src"] == "judge" and e["path"] not in trusted]
+    return trusted, list(dict.fromkeys(judged))
+
+
 def path_tags(f: Features, facts=None) -> frozenset[str]:
-    """Risk tags with path evidence: the facts' non-text risk items, else the path regexes over files_named."""
+    """Risk tags with path evidence: the facts' non-text risk items, else the path regexes over the prepass files."""
     if isinstance(facts, facts_mod.Facts):
         return frozenset(i.tag for i in facts.risk_evidence if i.source != "text")
     return frozenset(tag for tag, _text_rx, path_rx in prepass.RISK_PATTERNS
-                     if any(path_rx.search(p) for p in f.files_named))
+                     if any(path_rx.search(p) for p in f.files))
 
 
 def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None, facts=None) -> Decision:
@@ -90,6 +136,7 @@ def decide(task: Task, f: Features, cfg: Config, judge=None, clf=None, facts=Non
         needs_clarification=f.ambiguity >= 3,
         ladder=ladder,
         reasons=tuple(reasons),
+        files=files_from_facts(facts, task.hint_files),
         sources={
             "route": route_src,
             "type": type_src,
