@@ -1,6 +1,7 @@
 """Task state files: ``<home>/tasks/<id>/state.json`` (mr-spec §10.5)."""
 from __future__ import annotations
 
+import fcntl
 import glob
 import json
 import os
@@ -51,6 +52,60 @@ def _load(path: str) -> dict | None:
 
 def read_state(home: str, task_id: str) -> dict | None:
     return _load(_path(home, task_id))
+
+
+def queue_path(home: str) -> str:
+    return os.path.join(home, "state", "queue.jsonl")
+
+
+def read_queue(home: str) -> list[dict]:
+    """The waiting tasks, oldest first. A line that is not a JSON object is skipped."""
+    try:
+        with open(queue_path(home), encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except OSError:
+        return []
+    out = []
+    for line in lines:
+        try:
+            entry = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(entry, dict) and entry.get("task") and not entry.get("done"):
+            out.append(entry)
+    return out
+
+
+def _rewrite_queue(home: str, entries: list[dict]) -> None:
+    path = queue_path(home)
+    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=os.path.dirname(path))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as fh:
+            fh.write("".join(json.dumps(e, ensure_ascii=False) + "\n" for e in entries))
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def _edit_queue(home: str, change) -> None:
+    """Read, change and atomically rewrite the queue while holding a lock, so two runs cannot lose a line."""
+    os.makedirs(os.path.dirname(queue_path(home)), exist_ok=True)
+    with open(queue_path(home) + ".lock", "a", encoding="utf-8") as guard:
+        fcntl.flock(guard, fcntl.LOCK_EX)
+        _rewrite_queue(home, change(read_queue(home)))
+
+
+def queue_put(home: str, entry: dict) -> None:
+    """One line per task: a task that defers again replaces its line."""
+    _edit_queue(home, lambda entries: [e for e in entries if e["task"] != entry["task"]] + [entry])
+
+
+def queue_remove(home: str, task_id: str) -> None:
+    _edit_queue(home, lambda entries: [e for e in entries if e["task"] != task_id])
 
 
 def _patch_nonempty(state: dict) -> bool:

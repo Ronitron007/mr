@@ -7,8 +7,9 @@ import os
 import re
 import sys
 import time
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
+from types import SimpleNamespace
 from typing import NamedTuple
 
 from mr import (acceptance, advisor, checkjudge, classify, droid, exitcodes, guard, hygiene, isolation, patches,
@@ -344,12 +345,19 @@ NO_TEST = "(no locked test covers this; check the patch against it directly) "
 
 class Found(NamedTuple):
     """What the plan judge decided. kind: let_through | repaired (res is a valid plan), again (res is the
-    mechanically repaired but still invalid plan), instruct (planner reruns with the instructions), replan."""
+    mechanically repaired but still invalid plan), instruct (planner reruns with the instructions), replan,
+    defer (the judge could not run; the task waits)."""
     kind: str
     res: object
     ref: str | None = None
     reason: str | None = None
     instructions: tuple = ()
+
+
+def _hint(got) -> str:
+    """When the budget frees, from a guard-denied judge call; else the usual wait."""
+    guard_ = getattr(getattr(got, "guarded", None), "guard", None)
+    return (got.status == "guard_deny" and getattr(guard_, "frees_hint", None)) or "≈ in 60 min"
 
 
 def _decide(c, rung: str, prompt: str):
@@ -361,29 +369,32 @@ def _decide(c, rung: str, prompt: str):
         if got.result is not None:
             made += 1
             pipeline.add_cost(c.cost, got.result, got.guarded)
-        status = got.status
+        status, c.judge_hint = got.status, _hint(got)
         if status != "ok":
             break
         verdict = checkjudge.parse(got.text)
         status = "ok" if verdict else "invalid"
         if verdict:
             break
+    c.judge_status = status
     return verdict, status, made
 
 
-def _log_decision(c, ref: str, check: str, findings, rung: str, verdict, status: str, made: int) -> None:
+def _log_decision(c, ref: str, check: str, findings, rung: str, verdict, status: str, made: int,
+                  deferred: bool = False) -> None:
     pts = c.cfg.guard.est_seed.get(rung, 0.0) * made if made else None
     c.log.append(checkjudge.record(
         task=c.task.id, ref=ref, check=check, findings=findings,
         verdict=verdict.verdict if verdict else None, reason=verdict.reason if verdict else None,
         instructions=verdict.instructions if verdict else [], rung=rung,
-        judge_model=c.cfg.rungs[rung].model, pts_est=pts, deferred=False, status=status))
+        judge_model=c.cfg.rungs[rung].model, pts_est=pts, deferred=deferred, status=status))
 
 
 def _ask_plan_judge(c, res):
     """One decision: up to two calls (the first invalid reply is retried). Logs the check_judge row.
 
-    Returns (Verdict | None, ref). A judge failure is a row with a null verdict; it defers nothing yet."""
+    Returns (Verdict | None, ref). A judge failure is a row with a null verdict (deferred when check_judge.defer
+    is on)."""
     cfg, task = c.cfg, c.task
     rung = checkjudge.plan_rung(cfg, planner=res.rung, difficulty=c.d.difficulty,
                                 risk="high" if getattr(c, "high_risk", False) else c.d.risk)
@@ -392,7 +403,8 @@ def _ask_plan_judge(c, res):
     c.cj_calls = getattr(c, "cj_calls", 0) + 1
     ref = f"cj-{task.id}-{c.cj_calls}"
     verdict, status, made = _decide(c, rung, checkjudge.render(state_))
-    _log_decision(c, ref, "plan", res.errors, rung, verdict, status, made)
+    _log_decision(c, ref, "plan", res.errors, rung, verdict, status, made,
+                  deferred=verdict is None and _defer_on(c, "plan"))
     return verdict, ref
 
 
@@ -414,7 +426,7 @@ def _plan_findings(c, res) -> Found:
         return Found("replan", res)
     verdict, ref = _ask_plan_judge(c, res)
     if verdict is None:
-        return Found("replan", res, ref)
+        return Found("defer" if _defer_on(c, "plan") else "replan", res, ref)
     c.plan_judge_reason = verdict.reason
     lost = Found("replan", res, ref, verdict.reason)
     if verdict.verdict == "reject":
@@ -453,11 +465,11 @@ def _plan_call(c, rung, prior_errors=None):
     return res, row
 
 
-def _recover(c, res, row):
+def _recover(c, res, row, stronger: bool = False):
     """Judge a plan that is still invalid; one stronger re-plan allowed. Logs every planner row after its decision.
 
-    Returns the last PlanResult: valid, or invalid (plan-less run, or infra when the planner is unreachable)."""
-    stronger = False
+    Returns the last PlanResult: valid, or invalid (plan-less run, or infra when the planner is unreachable).
+    When the judge cannot run and check_judge.defer is on the task is parked (c.pending) and the row is kept in it."""
     while True:
         if res.ok or res.infra:
             c.log.append(row)
@@ -475,6 +487,8 @@ def _recover(c, res, row):
         if found.kind == "again":
             res = found.res
             continue
+        if found.kind == "defer":
+            return _defer_plan(c, res, row, stronger)
         if not (res.ok or res.infra):
             c.log.append(row)
         if found.kind == "instruct":
@@ -493,13 +507,22 @@ def _plan(c) -> int | None:
     Not a ladder rung: a Claude planner call costs points but does not count to claude/opus rungs.
     With plan.judge off, exit 3 if invalid twice. With it on, a plan still invalid after two attempts goes to the
     plan judge (accept, repair or reject); a reject, a judge failure or an unfixed repair gets one re-plan on the
-    stronger planner, then the task runs without a plan; an unreachable planner defers (75).
+    stronger planner, then the task runs without a plan; an unreachable planner defers (75), and so does a plan
+    judge that cannot run (check_judge.defer on), before any implementer rung.
     """
-    cfg, task = c.cfg, c.task
     c.uncovered_reqs = ()
     res, row = _plan_call(c, c.d.planner)
+    return _plan_finish(c, res, row)
+
+
+def _plan_finish(c, res, row, stronger: bool = False) -> int | None:
+    """The plan judge, the stronger re-plan and the checklist state after the first planner call."""
+    cfg, task = c.cfg, c.task
     if (getattr(cfg, "plan", None) or {}).get("judge", "on") == "on":
-        res = _recover(c, res, row)
+        res = _recover(c, res, row, stronger)
+        if c.pending:
+            return c.stop(exitcodes.DEFERRED, f"plan judge unavailable ({c.judge_status}); state is saved, "
+                                              f"resume with: mr resume {task.id}")
         if res.infra:
             return c.stop(exitcodes.DEFERRED, f"planner unavailable ({'; '.join(res.errors[:2])}); "
                                               "state is saved, run it again later")
@@ -572,8 +595,9 @@ def _scope_plan(c, dres) -> dict:
 def _scope_decision(c, code: str, dres, patch: bytes, sig: dict):
     """The scope judge on a flagged attempt whose H and A did not fail (one decision per attempt).
 
-    Returns (scope_verdict, Verdict | None, ref): accept | repair | reject, or unavailable when the judge cannot
-    decide or the per-task cap is used up (no call, no row). A second repair on the same rung counts as a reject."""
+    Returns (scope_verdict, Verdict | None, ref): accept | repair | reject, or unavailable when the per-task cap is
+    used up (no call, no row) or the judge cannot decide with check_judge.defer off; with it on a judge that cannot
+    decide gives deferred. A second repair on the same rung counts as a reject."""
     cfg, task = c.cfg, c.task
     if getattr(c, "scope_calls", 0) >= cfg.check_judge["max_scope_calls"]:
         return "unavailable", None, None
@@ -586,9 +610,10 @@ def _scope_decision(c, code: str, dres, patch: bytes, sig: dict):
         signals={"H": "pass", "A": "pass" if sig["A"] else "not run"}, diff=patch.decode("utf-8", "replace"),
         attempt={"rung": code, "n": c.counters["attempts"]})
     verdict, status, made = _decide(c, rung, checkjudge.render(state_))
-    _log_decision(c, ref, "scope", dres.findings, rung, verdict, status, made)
+    defer = verdict is None and _defer_on(c, "scope")
+    _log_decision(c, ref, "scope", dres.findings, rung, verdict, status, made, deferred=defer)
     if verdict is None:
-        return "unavailable", None, ref
+        return "deferred" if defer else "unavailable", None, ref
     if verdict.verdict == "repair":
         repaired = getattr(c, "scope_repaired", ())
         if code in repaired:
@@ -741,8 +766,8 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
     c.patch_path = patches.save_patch(cfg.paths.home, task.id, len(c.rungs) + 1, rung.model, patch)
     c.diff, c.in_rung = patches.numstat(patch), False
     sig = {"H": None, "D": None, "A": None, "C": None}
-    infra, empty, hres, sa, rv = rr.is_error or rr.timed_out, not patch.strip(), None, None, None
-    aud, sv, ref, d_kept = None, None, None, False
+    infra, empty, hres, sa = rr.is_error or rr.timed_out, not patch.strip(), None, None
+    aud, sv, jv, ref, dres, green = None, None, None, None, None, False
     if code == "S+A" and not viol:
         aud, out["adv_action"] = _advisor_audit(c, rr, attempt, repo)
     if viol:
@@ -770,16 +795,38 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
             out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing]
                         + [f"locked: {p}" for p in sa.lock_violations])
         green = not (infra or empty) and checkable and bool(sig["H"]) and sig["A"] is not False
-        if judged and green and dres.status == "flagged":
-            sv, jv, ref = _scope_decision(c, code, dres, patch, sig)
+    at = SimpleNamespace(code=code, kind=kind, handoff=handoff, attempt=attempt, started=started, rr=rr,
+                         guarded=guarded, droid_try=droid_try, sig=sig, out=out, viol=viol, infra=infra,
+                         dres=dres, hres=hres, sa=sa, aud=aud, green=green, patch=patch, row=None)
+    if _scope_flagged(c, dres, green):
+        sv, jv, ref = _scope_decision(c, code, dres, patch, sig)
+        if sv == "deferred":
+            return _defer_scope(c, at, ref)
+    return _finish(c, at, sv, jv, ref)
+
+
+def _scope_flagged(c, dres, green: bool) -> bool:
+    """The scope judge decides this attempt: it is on, H and A did not fail, and D only has findings."""
+    return dres is not None and _scope_on(c) and green and dres.status == "flagged"
+
+
+def _finish(c, at, sv, jv, ref) -> dict:
+    """The rest of an attempt after the scope decision: review C, class, the rung entry and the attempt record."""
+    cfg, d, out, sig, code = c.cfg, c.d, at.out, at.sig, at.code
+    rung, d_kept = cfg.rungs[code], False
+    if not at.viol:
+        judged, dres, green = _scope_on(c), at.dres, at.green
+        if sv is not None:
             green = sv == "accept"
             out["J"] = [jv.reason, *jv.instructions] if jv else ["scope judge unavailable"]
         d_kept = (dres.status == "pass" or sv == "accept") if judged else bool(dres.ok)
+        aud = at.aud
         verdict = (aud.verdict or {}) if aud is not None and aud.relay_status == "ok" else {}
         adv_c = verdict.get("verdict") == "block" or (  # §6.3: C required on the relayed risks
             verdict.get("verdict") == "concern" and aud is not None and "unaddressed" in aud.violations)
+        rv = None
         if green and (d.needs_review or adv_c or sv == "accept"):  # C only for a candidate that passes D, H and A
-            rv, sig["C"] = _review(c, rung, patch,
+            rv, sig["C"] = _review(c, rung, at.patch,
                                    extra_reqs=_adv_review_reqs(verdict) if adv_c else None)
             out["C"] = [f"{it.get('id')}: {it.get('evidence')}" for it in rv.items if it.get("verdict") == "fail"]
         if rv is not None and rv.deferred:
@@ -787,20 +834,28 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
             out.update(stop=exitcodes.DEFERRED, why=f"required review {rv.reviewer} denied by the guard on a "
                        f"high-risk task; the patch is saved in {c.patch_path}")
         elif not green or (rv is not None and not rv.ok):
-            out.update(_classify(c, rung, rr, dres, hres, sa, rv, infra, judged, sv))
+            out.update(_classify(c, rung, at.rr, dres, at.hres, at.sa, rv, at.infra, judged, sv))
             if out["J"]:
                 out["why"] += "; scope judge: " + out["J"][0]
         if code == "S+A":
-            out.update(_adv_verdict(c, rr, aud, green, out["cls"]))
-    out["keep"] = (not viol and not infra and (d_kept or out["cls"] == "scope_repair")
+            out.update(_adv_verdict(c, at.rr, aud, green, out["cls"]))
+    out["keep"] = (not at.viol and not at.infra and (d_kept or out["cls"] == "scope_repair")
                    and len(out["A"]) <= _MAX_FAILING_A and len(out["H"]) <= _MAX_NEW_H)
     c.rungs.append({"rung": code, "model": rung.model, "class": out["cls"], "signals": dict(sig),
                     "patch": c.patch_path, "failing": list(out["A"])})
-    c.log.append(tag_record(pipeline.attempt_record(c, rung, code, rr, guarded, attempt, started, sig, out["cls"],
-                                                    decision="stop" if out["stop"] is not None else None,
-                                                    d_warnings=out["D_warn"]),
-                            rr, droid_try) | {"d_judge_ref": ref})
+    c.log.append(_attempt_row(c, rung, at, out["cls"], out["stop"]) | {"d_judge_ref": ref})
     return out
+
+
+def _attempt_row(c, rung, at, cls: str | None, stop) -> dict:
+    """The implementer record. A resumed attempt carries the row made when it was deferred; only the verdict-
+    dependent fields are set now."""
+    if at.row is None:
+        return tag_record(pipeline.attempt_record(c, rung, at.code, at.rr, at.guarded, at.attempt, at.started,
+                                                  at.sig, cls, decision="stop" if stop is not None else None,
+                                                  d_warnings=at.out["D_warn"]), at.rr, at.droid_try)
+    return dict(at.row, signals=dict(at.sig), failure_class=cls, failure_source="rules" if cls else None,
+                decision="stop" if stop is not None or cls else "accept")
 
 
 def _review(c, rung, patch: bytes, extra_reqs=None):
@@ -864,6 +919,154 @@ def _step(c, cur: str, cls: str) -> Step:
     return step
 
 
+_ARGS = ("budget", "advisor", "advisor_consults", "advisor_slot", "wait_lock_s", "experiment", "yes", "judge",
+         "classifier", "route", "rung")
+
+
+def _defer_on(c, check: str) -> bool:
+    """A judge that cannot run parks the task. A plan judge only does so before the first rung (no re-plan)."""
+    on = (getattr(c.cfg, "check_judge", None) or {}).get("defer") == "on"
+    return on and (check == "scope" or c.replans == 0)
+
+
+def decision_from(doc: dict) -> router.Decision:
+    return router.Decision(**{**doc, "risk_tags": frozenset(doc["risk_tags"]), "ladder": tuple(doc["ladder"]),
+                              "reasons": tuple(doc["reasons"]), "risk_evidence": tuple(doc.get("risk_evidence") or ())})
+
+
+def _context(c) -> dict:
+    """Everything a resumed run needs besides state.json's own fields and the judge step's pending block."""
+    task = c.task
+    return {
+        "task": {"text": task.text, "params": asdict(task.params), "hint_files": list(task.hint_files),
+                 "source": task.source, "deprecated": list(task.deprecated)},
+        "decision": {**asdict(c.d), "risk_tags": sorted(c.d.risk_tags)},
+        "args": {k: getattr(c.args, k, None) for k in _ARGS}, "started_at": c.started_at,
+        "cost": dict(c.cost), "seq": c.seq, "n_review": c.n_review, "files": list(c.files),
+        "effort_up_used": list(c.effort_up_used), "prior": list(c.prior), "infra": c.infra,
+        "adv_reruns": getattr(c, "adv_reruns", 0), "uncovered_reqs": list(getattr(c, "uncovered_reqs", ())),
+        "plan_rejected": bool(getattr(c, "plan_rejected", False)),
+        "plan_judge_reason": getattr(c, "plan_judge_reason", None), "high_risk": bool(c.high_risk),
+        "path_tags": sorted(c.path_tags), "base_set": sorted(c.base_set),
+    }
+
+
+def _defer(c, check: str, pending: dict) -> int:
+    """Park the task: pending block and HEAD for state.json, one queue line, the resume hint on stderr. Returns 75."""
+    task, home = c.task, c.cfg.paths.home
+    used = "scope_calls" if check == "scope" else "cj_calls"
+    pending.update(check=check, ctx=_context(c), n_plan=c.n_plan, counters=dict(c.counters),
+                   scope_calls=getattr(c, "scope_calls", 0), cj_calls=getattr(c, "cj_calls", 0),
+                   scope_repaired=sorted(getattr(c, "scope_repaired", ())), tree=patches.take_reset_tree(task.repo))
+    pending[used] -= 1  # the call that got no verdict does not use up a slot of the cap
+    c.pending, c.deferred = pending, {"check": check, "status": c.judge_status}
+    c.head = pipeline.git(task.repo, "rev-parse", "HEAD").stdout.strip() or None
+    c.frees_hint = c.judge_hint
+    state.queue_put(home, {"task": task.id, "repo": task.repo, "check": check, "queued_at": now_ist(),
+                           "frees_hint": c.frees_hint})
+    print(f"deferred: {check} judge unavailable ({c.judge_status}); resume with: mr resume {task.id}",
+          file=sys.stderr)
+    return exitcodes.DEFERRED
+
+
+def _defer_plan(c, res, row: dict, stronger: bool):
+    _defer(c, "plan", {"findings": list(res.errors), "doc": res.doc, "repairs": list(res.repairs),
+                       "retry_errors": list(res.retry_errors), "status": res.status, "rung": res.rung,
+                       "stronger": stronger, "row": row})
+    return res
+
+
+def _defer_scope(c, at, ref) -> dict:
+    """The scope judge could not run: keep the patch, put the tree back and park the attempt."""
+    task, rung = c.task, c.cfg.rungs[at.code]
+    c.rungs.append({"rung": at.code, "model": rung.model, "class": "deferred", "signals": dict(at.sig),
+                    "patch": c.patch_path, "failing": []})
+    r = patches.reset(task.repo, c.reset_tree, c.patch_path, c.cfg.paths.home, task.id)
+    if not r.ok:
+        return dict(at.out, stop=exitcodes.UNSAFE_GIT,
+                    why=f"reset refused: {r.reason}; saved {', '.join(r.saved)}")
+    aud = at.aud
+    code = _defer(c, "scope", {
+        "findings": list(at.dres.findings), "rung": at.code, "attempt": at.attempt, "kind": at.kind,
+        "handoff": at.handoff, "dres": asdict(at.dres), "sig": dict(at.sig), "out": at.out,
+        "rr": {"rc": at.rr.rc, "is_error": at.rr.is_error, "timed_out": at.rr.timed_out,
+               "has_envelope": at.rr.has_envelope, "mr_result": at.rr.mr_result},
+        "aud": {"verdict": aud.verdict, "relay_status": aud.relay_status,
+                "violations": list(aud.violations)} if aud is not None else None,
+        "row": _attempt_row(c, rung, at, None, None)})
+    return dict(at.out, stop=code, why=f"scope judge unavailable ({c.judge_status}); the patch is saved in "
+                                       f"{c.patch_path}; resume with: mr resume {task.id}")
+
+
+def restore(c, st: dict) -> None:
+    """Put a context built from state.json back to where the deferred run stopped."""
+    p = st["pending"]
+    ctx = p["ctx"]
+    c.reset_tree, c.checklist, c.rungs = st["reset_point"], st["checklist"], list(st["rungs"])
+    c.iso, c.branch, c.orig_branch, c.patch_path, c.replans = (
+        st["isolation"], st["branch"], st["orig_branch"], st["patch"], st["replans"])
+    c.counters, c.cost, c.n_plan = dict(p["counters"]), dict(ctx["cost"]), p["n_plan"]
+    c.seq, c.n_review, c.infra = ctx["seq"], ctx["n_review"], ctx["infra"]
+    c.scope_calls, c.cj_calls, c.scope_repaired = p["scope_calls"], p["cj_calls"], set(p["scope_repaired"])
+    c.files, c.effort_up_used, c.prior = tuple(ctx["files"]), list(ctx["effort_up_used"]), list(ctx["prior"])
+    c.adv_reruns, c.uncovered_reqs = ctx["adv_reruns"], tuple(ctx["uncovered_reqs"])
+    c.plan_rejected, c.plan_judge_reason = ctx["plan_rejected"], ctx["plan_judge_reason"]
+    c.high_risk, c.path_tags, c.base_set = ctx["high_risk"], frozenset(ctx["path_tags"]), frozenset(ctx["base_set"])
+    if c.checklist:
+        c.locked = tuple(t["path"] for t in c.checklist["tests"])
+        with open(os.path.join(state.task_dir(c.cfg.paths.home, c.task.id), "tests.lock"), encoding="utf-8") as fh:
+            c.lockdoc = json.load(fh)
+
+
+def _plan_result(p: dict) -> planner.PlanResult:
+    return planner.PlanResult(False, None, None, list(p["findings"]), 0, [], p["rung"], (), (), list(p["repairs"]),
+                              list(p["retry_errors"]), p["status"], False, p["doc"])
+
+
+def _apply_saved_patch(c) -> str | None:
+    """Put the deferred attempt's change back on the tree (which is at the reset point). Returns an error text."""
+    repo = c.task.repo
+    top = pipeline.git(repo, "rev-parse", "--show-toplevel").stdout.strip()
+    got = pipeline.git(top, "apply", "--binary", "--whitespace=nowarn", os.path.abspath(c.patch_path))
+    if got.returncode != 0:
+        return f"could not restore the saved patch {c.patch_path}: {(got.stderr or got.stdout).strip()}"
+    return None
+
+
+def _resume_rung(c, p: dict) -> dict:
+    """The deferred attempt: run the scope judge again with the saved findings, then finish it as _rung does."""
+    code, sig, out, rr = p["rung"], p["sig"], p["out"], p["rr"]
+    with open(c.patch_path, "rb") as fh:
+        patch = fh.read()
+    dres = scope.SignalD(**{k: tuple(v) if isinstance(v, list) else v for k, v in p["dres"].items()})
+    c.cur, c.files, c.diff = code, dres.files, patches.numstat(patch)
+    if c.rungs and c.rungs[-1]["class"] == "deferred":
+        c.rungs.pop()
+    saved = p.get("aud")
+    at = SimpleNamespace(
+        code=code, kind=p["kind"], handoff=p["handoff"], attempt=p["attempt"], started=p["row"]["started_at"],
+        rr=SimpleNamespace(**rr), guarded=None, droid_try=None, sig=sig, out=out, viol=None, infra=False, dres=dres,
+        hres=SimpleNamespace(ok=True, new_failures=tuple(out["H"])) if sig["H"] is not None else None,
+        sa=SimpleNamespace(ok=True, failed=(), missing=(), lock_violations=()) if sig["A"] is not None else None,
+        aud=SimpleNamespace(**saved) if saved else None, green=True, patch=patch, row=p["row"])
+    sv, jv, ref = _scope_decision(c, code, dres, patch, sig)
+    if sv == "deferred":
+        return _defer_scope(c, at, ref)
+    return _finish(c, at, sv, jv, ref)
+
+
+def resume_task(c, p: dict) -> int:
+    """Continue a deferred task where it stopped: the plan judge, or the scope judge on the saved attempt."""
+    if p["check"] == "plan":
+        c.uncovered_reqs = ()
+        if (code := _plan_finish(c, _plan_result(p), p["row"], p["stronger"])) is not None:
+            return code
+        return _ladder(c, c.ladder[0], "implementer", "(first attempt)")
+    if err := _apply_saved_patch(c):
+        return c.stop(exitcodes.UNSAFE_GIT, err)
+    return _ladder(c, p["rung"], p["kind"], p["handoff"], p)
+
+
 def run_task(c) -> int:
     """The full ladder: planner (medium+), rungs, signals, escalation, accept or exit (§10.2)."""
     cfg, task = c.cfg, c.task
@@ -879,11 +1082,19 @@ def run_task(c) -> int:
             return code
     else:
         c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
-    cur, kind, handoff = c.ladder[0], "implementer", "(first attempt)"
+    return _ladder(c, c.ladder[0], "implementer", "(first attempt)")
+
+
+def _ladder(c, cur: str, kind: str, handoff: str, pending: dict | None = None) -> int:
+    """The rung loop. ``pending`` is a deferred attempt: its scope judge runs first instead of a new rung."""
+    cfg, task = c.cfg, c.task
     while True:
-        cur = advisor_rung(c, cur) if cur == "S+" else cur
-        c.save_state("rung")
-        o = _rung(c, cur, kind, handoff)
+        if pending is not None:
+            o, pending = _resume_rung(c, pending), None
+        else:
+            cur = advisor_rung(c, cur) if cur == "S+" else cur
+            c.save_state("rung")
+            o = _rung(c, cur, kind, handoff)
         c.save_state("next")
         if cur == "S+A":  # §7: at most one re-run of the rung without the advisor, not an attempt
             action = o.pop("adv_action", "none")

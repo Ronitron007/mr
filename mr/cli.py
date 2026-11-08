@@ -172,6 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
     _setup_flags(setup)
     _eval_flags(sp.add_parser("eval", help="Offline shadow judge and classifier report"))
     _droid_subparsers(sp.add_parser("droid", help="BYOK droid backend for S and S+"))
+    sp.add_parser("queue", help="Tasks waiting for a check judge")
+    sp.add_parser("resume", help="Continue a task that waited for a check judge").add_argument("task")
     for name in sorted(_DEFERRED):
         sp.add_parser(name, help=f"{name} (deferred in v1)")
     return p
@@ -228,6 +230,8 @@ def _cmd_parser(cmd: str) -> argparse.ArgumentParser:
         _eval_flags(p)
     elif cmd == "droid":
         _droid_subparsers(p)
+    elif cmd == "resume":
+        p.add_argument("task")
     return p
 
 
@@ -255,7 +259,8 @@ def main(argv: list[str] | None) -> int:
     if cmd in _DEFERRED:
         print(f"mr {cmd}: not built in v1 L0", file=sys.stderr)
         return ec.USAGE
-    if cmd not in ("run", "route", "guard", "review", "gc", "unlock", "log", "trace", "setup", "eval", "droid"):
+    if cmd not in ("run", "route", "guard", "review", "gc", "unlock", "log", "trace", "setup", "eval", "droid",
+                   "queue", "resume"):
         print(f"mr: unknown command {cmd!r}", file=sys.stderr)
         return ec.USAGE
     if cmd_argv in (["-h"], ["--help"]):

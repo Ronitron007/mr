@@ -29,6 +29,7 @@ DEPRECATED_FIELD = "files_named"
 DEPRECATED_LINE = "files_named is deprecated; use hints.files"
 _PROMPT = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                        "prompts", "implementer.v1.txt")
+_ENDED = ("done", "check_judge")
 _OUTCOME = {
     ec.OK: "accepted", ec.NOT_ACCEPTED: "exhausted", ec.HUMAN: "needs_human",
     ec.UNSAFE_GIT: "unsafe", ec.DEFERRED: "deferred", ec.SIGINT: "interrupted",
@@ -88,6 +89,8 @@ class _Ctx:
         self.infra = 0  # infra retries already made for the current rung
         self.in_rung = False  # a rung is running and its patch is not saved yet
         self.handling = False  # set once a signal is being handled or we are finalising
+        self.pending = self.head = None  # a check judge that could not run: the state.json block and the git HEAD
+        self.deferred = self.resumed_from = None  # {check, status} of this run's defer; queued_at of a resumed one
 
     @property
     def outcome(self) -> str:
@@ -109,11 +112,12 @@ class _Ctx:
             "reset_point": self.reset_tree, "checklist": self.checklist, "rungs": list(self.rungs),
             "used_rungs": self.used, "attempts": self.counters["attempts"],
             "claude_rungs": self.counters["claude_rungs"], "replans": self.replans, "next": next_,
-            "outcome": self.outcome if next_ == "done" else None,
-            "exit": self.exit if next_ == "done" else None,
-            "reason": self.reason if next_ == "done" else None,
+            "outcome": self.outcome if next_ in _ENDED else None,
+            "exit": self.exit if next_ in _ENDED else None,
+            "reason": self.reason if next_ in _ENDED else None,
             "patch": self.patch_path, "final_md": self.final_md,
             "branch": self.branch, "orig_branch": self.orig_branch, "commit": self.commit,
+            **({"head": self.head, "pending": self.pending} if self.pending else {}),
         }
 
     def save_state(self, next_: str) -> str:
@@ -252,8 +256,8 @@ def _restore_handlers(old: dict) -> None:
 
 # --- the pipeline ---------------------------------------------------------------
 
-def run(args) -> int:
-    t0, started_at = time.time(), now_ist()
+def _setup(args, t0: float, started_at: str):
+    """Route the task and build its context. Returns (context, work) or the exit code of a usage error."""
     if args.once and not args.rung:
         _say(_L0)
         return ec.USAGE
@@ -291,11 +295,23 @@ def run(args) -> int:
         c.n_clf = intake.clf.calls
     _start_classifier(c)
     _start_judge(c)
+    return c, (lambda: _body(c)) if args.once else (lambda: loop.run_task(c))
+
+
+def run(args, resumed=None) -> int:
+    """``resumed`` is the (context, work) that `mr resume` made; it runs under the same harness."""
+    if resumed is None:
+        made = _setup(args, time.time(), now_ist())
+        if isinstance(made, int):
+            return made
+        c, work = made
+    else:
+        c, work = resumed
     old = _install_handlers(c)
     try:
         try:
             try:
-                _body(c) if args.once else loop.run_task(c)
+                work()
             except _Interrupted as e:
                 c.stop(e.code, "interrupted by " + ("SIGINT" if e.code == ec.SIGINT else "SIGTERM"))
             except Exception as e:
@@ -583,6 +599,8 @@ def _task_record(c: _Ctx, ended: str) -> dict:
         "label": {"state": "provisional"}, "unknown": [],
         "files_src": judge_mod.files_by_src(getattr(d, "files", None) or {}),
         **({"plan_rejected": True} if getattr(c, "plan_rejected", False) else {}),
+        **({"deferred": c.deferred} if getattr(c, "deferred", None) else {}),
+        **({"resumed": True, "resumed_from_ts": c.resumed_from} if getattr(c, "resumed_from", None) else {}),
         **_deprecated(c),
         **_intake_counts(c),
     }
@@ -608,7 +626,7 @@ def _finalize(c: _Ctx) -> None:
         except Exception as e:
             _say(f"could not write FINAL.md: {e}")
     try:
-        c.save_state("done")
+        c.save_state("check_judge" if c.pending and c.exit == ec.DEFERRED else "done")
     except Exception as e:
         _say(f"could not write state.json: {e}")
     _join_classifier(c)

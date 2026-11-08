@@ -132,6 +132,11 @@ class TestPlanJudgeRun(JudgeCase):
         self.assert_schema()
 
     def test_judge_invalid_twice_falls_back_to_stronger_plan(self):
+        with open(self.cfgpath, encoding='utf-8') as fh:
+            raw = json.load(fh)
+        raw['check_judge'] = {'defer': 'off'}
+        with open(self.cfgpath, 'w', encoding='utf-8') as fh:
+            json.dump(raw, fh)
         self.set_scenario({'cursor': {GH: [BAD], GX: [mul('*')]},
                            'claude': {SONNET: [{'result': 'not json'}, {'result': '{"verdict": "maybe"}'},
                                                {'result': json.dumps(PLAN)}, {'result': REVIEW_PASS}]}})

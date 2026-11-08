@@ -224,6 +224,8 @@ class TestHAndAFirst(ScopeCase):
 
 
 class TestJudgeUnavailable(ScopeCase):
+    check_judge = {'scope': 'on', 'defer': 'off'}
+
     def test_invalid_reply_twice_is_scope_rejected(self):
         self.set_scenario({'cursor': {GL: [STRAYED], GM: [{'files': README}]},
                            'claude': {SONNET: [{'result': 'not json'}, {'result': '{"verdict": "maybe"}'}]}})
