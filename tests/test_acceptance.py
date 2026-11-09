@@ -303,6 +303,7 @@ class TestVitestReport(unittest.TestCase):
         tree = "/repo/app"
         path = "src/features/chat/__tests__/muteSettings.mr.spec.ts"
         report = {
+            "success": False, "numTotalTests": 0, "numPassedTests": 0, "numFailedTests": 0,
             "testResults": [{
                 "name": os.path.join(tree, path),
                 "status": "failed",

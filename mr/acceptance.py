@@ -473,8 +473,11 @@ def _acceptable(err: CollectionError, create: list[str], test_file: str | None) 
 
 
 def base_errors(checklist: dict, run: NamedRun) -> list[str]:
-    """Empty when every named test is red on the current tree (AC-A-2)."""
+    """Empty when every named test is red on the current tree (AC-A-2) and the run has no other error: no runner
+    summary problem and no fixture error (such as ``tearDownModule``) in a locked file, except in a file whose
+    import fails on a module the task creates."""
     create = _create_paths(checklist)
+    locked = set(_acceptance_paths(checklist))
     errors: list[str] = ["collection error: timeout"] if getattr(run, "timed_out", False) else []
     red_files: set[str] = set()
     for err in getattr(run, "collection_errors", ()):
@@ -483,6 +486,10 @@ def base_errors(checklist: dict, run: NamedRun) -> list[str]:
                 red_files.add(err.file)
         else:
             errors.append(f"collection error: {err.detail}")
+    errors += [f"run error on base: {text}" for file, text in getattr(run, "problems", ())
+               if file is None or file in locked]
+    errors += [f"{rel}::{name} failed on base: a locked test file must not fail outside its named tests"
+               for rel, name in _other_failed(checklist, run) if name in _FIXTURES and rel not in red_files]
     for item in checklist.get("acceptance") or []:
         if not isinstance(item, dict):
             continue

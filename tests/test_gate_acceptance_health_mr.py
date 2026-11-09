@@ -271,5 +271,22 @@ class TestEmptyPlanForDocs(LoopCase):
         self.assertIn('keys: tests must be a non-empty list', errors)
 
 
+BROKEN_TEARDOWN = ('import mul\nimport unittest\n\n\nclass TestMul(unittest.TestCase):\n'
+                   '    def test_mul_basic(self):\n        self.assertEqual(mul.mul(2, 3), 6)\n\n\n'
+                   'def tearDownModule():\n    raise RuntimeError("planner bug")\n')
+
+
+class TestLockedTeardownOnBase(RunnerCase):
+    def test_broken_locked_teardown_is_rejected_at_plan_time(self):
+        self.write({'mul.py': 'def mul(a, b):\n    return a + b\n'})
+        doc = copy.deepcopy(PLAN)
+        doc['scope'] = {'modify': ['mul.py'], 'create': [TEST_PATH], 'forbidden': []}
+        doc['tests'][0]['content'] = BROKEN_TEARDOWN
+        _, _, errors = planner.check_doc(doc, cfg=self.cfg, tree=self.repo, task_id='t-base')
+        self.assertTrue(any(f'{TEST_PATH}::tearDownModule' in err for err in errors), errors)
+        self.assertFalse(os.path.exists(os.path.join(self.repo, TEST_PATH)), 'the rejected test is removed')
+        self.assertFalse(os.path.exists(os.path.join(self.cfg.paths.home, 'tasks', 't-base', 'checklist.json')))
+
+
 if __name__ == '__main__':
     unittest.main()
