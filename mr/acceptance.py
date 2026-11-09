@@ -23,6 +23,10 @@ _CANNOT_FIND = re.compile(
 )
 _SETUP_STRINGS = re.compile(r"""['"]([^'"]+)['"]""")
 _EXT = re.compile(r"\.(py|ts|tsx|js|mjs|cjs)$")
+_RAN = re.compile(r"^Ran (\d+) tests? in \S+s$")
+_VERDICT = re.compile(r"^(?:OK|FAILED|NO TESTS RAN)\b")
+_FIXTURES = frozenset({"setUpModule", "tearDownModule", "setUpClass", "tearDownClass"})
+_TOTALS = ("numTotalTests", "numPassedTests", "numFailedTests")
 
 
 @dataclass(frozen=True)
@@ -35,13 +39,15 @@ class CollectionError:
 
 class NamedRun(dict):
     """``(file, test name) -> status``, plus how the test process ended: ``collection_errors``,
-    ``returncode`` (None when no process ran) and ``timed_out``."""
+    ``returncode`` (None when no process ran), ``timed_out`` and ``problems``: ``(file or None, text)`` for a
+    runner summary that is missing or does not match the statuses."""
 
-    def __init__(self, statuses=None, collection_errors=(), returncode=None, timed_out=False):
+    def __init__(self, statuses=None, collection_errors=(), returncode=None, timed_out=False, problems=()):
         super().__init__(statuses or {})
         self.collection_errors = tuple(collection_errors)
         self.returncode = returncode
         self.timed_out = timed_out
+        self.problems = tuple(problems)
 
 
 @dataclass(frozen=True)
@@ -207,16 +213,24 @@ def parse_vitest_report(report: dict, *, tree: str) -> NamedRun:
     """Parse a vitest ``--reporter=json`` document. Does not run vitest."""
     statuses: dict[tuple[str, str], str] = {}
     errors: list[CollectionError] = []
+    counts = dict.fromkeys(_TOTALS, 0)
+    failed_file = False
     for result in report.get("testResults") or []:
         if not isinstance(result, dict):
             continue
         rel = _report_rel(tree, str(result.get("name") or ""))
+        failed_file = failed_file or result.get("status") == "failed"
         assertions = result.get("assertionResults") or []
         if assertions:
             for item in assertions:
-                if not isinstance(item, dict) or not item.get("title"):
+                if not isinstance(item, dict):
                     continue
-                statuses[(rel, str(item["title"]))] = str(item.get("status") or "failed")
+                status = str(item.get("status") or "failed")
+                counts["numTotalTests"] += 1
+                counts["numPassedTests"] += status == "passed"
+                counts["numFailedTests"] += status == "failed"
+                if item.get("title"):
+                    statuses[(rel, str(item["title"]))] = status
             continue
         message = str(result.get("message") or "")
         found = _CANNOT_FIND.search(message)
@@ -227,7 +241,23 @@ def parse_vitest_report(report: dict, *, tree: str) -> NamedRun:
             ))
         elif message or result.get("status") not in (None, "passed"):
             errors.append(CollectionError(rel, "other", None, message.strip()[:500] or "collection failed"))
-    return NamedRun(statuses, errors)
+    return NamedRun(statuses, errors, problems=_vitest_totals(report, counts, failed_file, statuses))
+
+
+def _vitest_totals(report: dict, counts: dict, failed_file: bool, statuses: dict) -> list[tuple]:
+    """The report's own totals must be there and match its test results and the parsed statuses."""
+    if not all(type(report.get(key)) is int for key in _TOTALS) or not isinstance(report.get("success"), bool):
+        return [(None, "vitest report has no totals (" + ", ".join(_TOTALS) + ", success)")]
+    wrong = [f"{key} {report[key]} but {got} in the results" for key, got in counts.items() if report[key] != got]
+    if wrong:
+        return [(None, "vitest totals do not match its test results: " + ", ".join(wrong))]
+    kept = sum(status == "failed" for status in statuses.values())
+    if kept < counts["numFailedTests"]:
+        return [(None, f"vitest has {counts['numFailedTests']} failed tests but only {kept} failed statuses "
+                       "after tests with the same file and title merge")]
+    if report["success"] is False and not counts["numFailedTests"] and not failed_file:
+        return [(None, "vitest reported success false with no failed test or file")]
+    return []
 
 
 def module_matches(module: str, paths) -> bool:
@@ -283,16 +313,38 @@ def _store_status(statuses: dict, name: str, qual: str, status: str, files: list
     statuses[(rel, name)] = _STATUS[status]
 
 
-def _parse_unittest(text: str, files: list[str]) -> NamedRun:
+def _unittest_summary(text: str, results: int, rc: int) -> list[tuple]:
+    """unittest's own end of run: the last ``Ran N tests`` line, then OK, FAILED or NO TESTS RAN. A run cut short
+    has none. N must be the number of test results printed, and only OK goes with exit code 0."""
+    lines = [line.strip() for line in text.splitlines()]
+    ran = [index for index, line in enumerate(lines) if _RAN.match(line)]
+    if not ran:
+        return [(None, "no unittest summary: the test process ended before unittest printed 'Ran N tests'")]
+    count = int(_RAN.match(lines[ran[-1]]).group(1))
+    verdict = next((line for line in lines[ran[-1] + 1:] if line), "")
+    if not _VERDICT.match(verdict):
+        return [(None, f"no unittest summary: no OK or FAILED line after 'Ran {count} tests'")]
+    problems = []
+    if count != results:
+        problems.append((None, f"unittest summary says {count} tests ran but the output has {results} results"))
+    if verdict.startswith("OK") != (rc == 0):
+        problems.append((None, f"unittest summary {verdict!r} but exit code {rc}"))
+    return problems
+
+
+def _parse_unittest(text: str, files: list[str], rc: int | None = None) -> NamedRun:
+    """Statuses from ``unittest -v`` output. With ``rc`` the summary is checked too (``_unittest_summary``)."""
     statuses: dict[tuple[str, str], str] = {}
     failed_modules: list[str] = []
     pending: tuple[str, str] | None = None
+    results = 0
     for line in text.splitlines():
         stripped = line.strip()
         match = _HEADER.match(stripped)
         if match:
             pending = None
             name, qual = match.group("name"), match.group("qual")
+            results += name not in _FIXTURES
             if "_FailedTest" in qual or "_FailedTest" in name:
                 failed_modules.append(name)
                 continue
@@ -335,7 +387,7 @@ def _parse_unittest(text: str, files: list[str]) -> NamedRun:
             if key not in seen:
                 seen.add(key)
                 errors.append(CollectionError(rel, "other", None, f"failed to import {mod}"))
-    return NamedRun(statuses, errors)
+    return NamedRun(statuses, errors, problems=() if rc is None else _unittest_summary(text, results, rc))
 
 
 def _killpg(pgid: int, sig: int) -> None:
@@ -384,7 +436,7 @@ def run_named(tree: str, files: list[str], runner: str, timeout) -> NamedRun:
                     report = None
                 if isinstance(report, dict):
                     run = parse_vitest_report(report, tree=tree)
-                    return NamedRun(run, run.collection_errors, rc, timed)
+                    return NamedRun(run, run.collection_errors, rc, timed, run.problems)
             if timed:
                 return NamedRun({}, (), rc, True)
             detail = text.strip()[:500] or "vitest produced no JSON report"
@@ -402,8 +454,8 @@ def run_named(tree: str, files: list[str], runner: str, timeout) -> NamedRun:
     rc, text, timed = _run_argv(
         [sys.executable, "-m", "unittest", "-v", *modules], tree, timeout, env=child_env,
     )
-    run = _parse_unittest(text, files)
-    return NamedRun(run, run.collection_errors, rc, timed)
+    run = _parse_unittest(text, files, None if timed else rc)
+    return NamedRun(run, run.collection_errors, rc, timed, run.problems)
 
 
 def _create_paths(checklist: dict) -> list[str]:
@@ -449,13 +501,15 @@ def base_errors(checklist: dict, run: NamedRun) -> list[str]:
 
 def run_errors(checklist: dict, run) -> tuple[str, ...]:
     """Why a final run of the locked tests is not healthy apart from its named tests: a timeout, a collection
-    error, a failed test that is not named (a teardown error) in a locked file, or a nonzero exit that no
-    failed status explains. Empty when the run is healthy."""
+    error, a runner summary that is missing or does not match (``NamedRun.problems``), a failed test that is not
+    named (a teardown error) in a locked file, or a nonzero exit that no failed status explains. Empty when the
+    run is healthy."""
     named = {(item.get("file"), name) for item in checklist.get("acceptance") or [] if isinstance(item, dict)
              for name in item.get("tests") or []}
     locked = set(_acceptance_paths(checklist))
     errors = ["timeout"] if getattr(run, "timed_out", False) else []
     errors += [f"collection error: {err.detail}" for err in getattr(run, "collection_errors", ())]
+    errors += [text for file, text in getattr(run, "problems", ()) if file is None or file in locked]
     errors += [f"{rel}::{name}" for (rel, name), status in run.items()
                if status == "failed" and rel in locked and (rel, name) not in named]
     returncode = getattr(run, "returncode", None)

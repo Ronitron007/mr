@@ -287,6 +287,7 @@ class TestVitestReport(unittest.TestCase):
         path = "src/__tests__/a.mr.spec.ts"
         checklist = _checklist(path, ["toggles off"], "it('toggles off'", [path], [path])
         report = {
+            "success": True, "numTotalTests": 1, "numPassedTests": 1, "numFailedTests": 0,
             "testResults": [{
                 "name": path,
                 "assertionResults": [{"title": "toggles off", "status": "passed"}],
