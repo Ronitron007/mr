@@ -834,11 +834,9 @@ def _finish(c, at, sv, jv, ref) -> dict:
             rv, sig["C"] = _review(c, rung, at.patch,
                                    extra_reqs=_adv_review_reqs(verdict) if adv_c else None)
             out["C"] = [f"{it.get('id')}: {it.get('evidence')}" for it in rv.items if it.get("verdict") == "fail"]
-        if rv is not None and rv.deferred:
-            c.frees_hint = guard.check(rv.reviewer, cfg).frees_hint or "≈ in 60 min"
-            out.update(stop=exitcodes.DEFERRED, why=f"required review {rv.reviewer} denied by the guard on a "
-                       f"high-risk task; the patch is saved in {c.patch_path}")
-        elif not green or (rv is not None and not rv.ok):
+        if rv is not None and (rv.deferred or rv.verdict == review.UNAVAILABLE):  # no verdict: park, burn no rung
+            return _defer_review(c, at, rv, sv, jv, ref)
+        if not green or (rv is not None and not rv.ok):
             out.update(_classify(c, rung, at.rr, dres, at.hres, at.sa, rv, at.infra, judged, sv))
             if out["J"]:
                 out["why"] += "; scope judge: " + out["J"][0]
@@ -871,11 +869,13 @@ def _review(c, rung, patch: bytes, extra_reqs=None):
     untested = getattr(c, "uncovered_reqs", ())
     if reqs and untested:  # the plan judge let these through without a locked test
         reqs = [dict(r, text=NO_TEST + r["text"]) if r["id"] in untested else r for r in reqs]
-    if extra_reqs:
-        reqs = list(reqs or []) + list(extra_reqs)
+    if extra_reqs:  # plan-less, the task stays an item beside the relayed risks
+        task_item = {"id": review.TASK_ID, "text": "the patch does what the TASK asks"}
+        reqs = list(reqs or [task_item]) + list(extra_reqs)
     rv = review.review(patch.decode("utf-8", "replace"), reqs,
                        None, rung.model, c.d.risk, cfg=c.cfg, tree=c.task.repo, task_id=c.task.id,
-                       attempt=c.seq, required=c.d.required_review, defer=getattr(c, "high_risk", False))
+                       attempt=c.seq, required=c.d.required_review, defer=getattr(c, "high_risk", False),
+                       task_text=c.task.text)
     c.seq += 1
     c.n_review += rv.attempts
     for rr, guarded in rv.spend:
@@ -960,18 +960,19 @@ def _context(c) -> dict:
 def _defer(c, check: str, pending: dict) -> int:
     """Park the task: pending block and HEAD for state.json, one queue line, the resume hint on stderr. Returns 75."""
     task, home = c.task, c.cfg.paths.home
-    used = "scope_calls" if check == "scope" else "cj_calls"
+    used = {"scope": "scope_calls", "plan": "cj_calls"}.get(check)
     pending.update(check=check, ctx=_context(c), n_plan=c.n_plan, counters=dict(c.counters),
                    scope_calls=getattr(c, "scope_calls", 0), cj_calls=getattr(c, "cj_calls", 0),
                    scope_repaired=sorted(getattr(c, "scope_repaired", ())), tree=patches.take_reset_tree(task.repo))
-    pending[used] -= 1  # the call that got no verdict does not use up a slot of the cap
+    if used:  # the call that got no verdict does not use up a slot of the cap
+        pending[used] -= 1
     c.pending, c.deferred = pending, {"check": check, "status": c.judge_status}
     c.head = pipeline.git(task.repo, "rev-parse", "HEAD").stdout.strip() or None
     c.frees_hint = c.judge_hint
     state.queue_put(home, {"task": task.id, "repo": task.repo, "check": check, "queued_at": now_ist(),
                            "frees_hint": c.frees_hint})
-    print(f"deferred: {check} judge unavailable ({c.judge_status}); resume with: mr resume {task.id}",
-          file=sys.stderr)
+    what = "reviewer" if check == "review" else f"{check} judge"
+    print(f"deferred: {what} unavailable ({c.judge_status}); resume with: mr resume {task.id}", file=sys.stderr)
     return exitcodes.DEFERRED
 
 
@@ -983,7 +984,24 @@ def _defer_plan(c, res, row: dict, stronger: bool):
 
 
 def _defer_scope(c, at, ref) -> dict:
-    """The scope judge could not run: keep the patch, put the tree back and park the attempt."""
+    """The scope judge could not run: park the attempt; mr resume runs the scope judge again."""
+    return _park(c, at, "scope", {"findings": list(at.dres.findings)}, f"scope judge unavailable ({c.judge_status})")
+
+
+def _defer_review(c, at, rv, sv, jv, ref) -> dict:
+    """Review C gave no verdict (unavailable, or the required strong reviewer is guard-denied on a high-risk task):
+    park the attempt; mr resume runs only the review again, with the saved scope decision."""
+    if rv.deferred:
+        c.judge_status, c.judge_hint = "guard_deny", guard.check(rv.reviewer, c.cfg).frees_hint or "≈ in 60 min"
+        why = f"required review {rv.reviewer} denied by the guard on a high-risk task"
+    else:
+        c.judge_status, c.judge_hint, why = "no_verdict", None, f"reviewer unavailable: {rv.warning}"
+    return _park(c, at, "review", {"sv": sv, "ref": ref, "jv": {"reason": jv.reason, "instructions": list(
+        jv.instructions)} if jv else None}, why)
+
+
+def _park(c, at, check: str, extra: dict, why: str) -> dict:
+    """A check had no verdict: keep the patch, put the tree back and park the attempt."""
     task, rung = c.task, c.cfg.rungs[at.code]
     c.rungs.append({"rung": at.code, "model": rung.model, "class": "deferred", "signals": dict(at.sig),
                     "patch": c.patch_path, "failing": []})
@@ -992,16 +1010,15 @@ def _defer_scope(c, at, ref) -> dict:
         return dict(at.out, stop=exitcodes.UNSAFE_GIT,
                     why=f"reset refused: {r.reason}; saved {', '.join(r.saved)}")
     aud = at.aud
-    code = _defer(c, "scope", {
-        "findings": list(at.dres.findings), "rung": at.code, "attempt": at.attempt, "kind": at.kind,
+    code = _defer(c, check, {
+        **extra, "rung": at.code, "attempt": at.attempt, "kind": at.kind,
         "handoff": at.handoff, "dres": asdict(at.dres), "sig": dict(at.sig), "out": at.out,
         "rr": {"rc": at.rr.rc, "is_error": at.rr.is_error, "timed_out": at.rr.timed_out,
                "has_envelope": at.rr.has_envelope, "mr_result": at.rr.mr_result},
         "aud": {"verdict": aud.verdict, "relay_status": aud.relay_status,
                 "violations": list(aud.violations)} if aud is not None else None,
         "row": _attempt_row(c, rung, at, None, None)})
-    return dict(at.out, stop=code, why=f"scope judge unavailable ({c.judge_status}); the patch is saved in "
-                                       f"{c.patch_path}; resume with: mr resume {task.id}")
+    return dict(at.out, stop=code, why=f"{why}; the patch is saved in {c.patch_path}; resume with: mr resume {task.id}")
 
 
 def restore(c, st: dict) -> None:
@@ -1040,7 +1057,8 @@ def _apply_saved_patch(c) -> str | None:
 
 
 def _resume_rung(c, p: dict) -> dict:
-    """The deferred attempt: run the scope judge again with the saved findings, then finish it as _rung does."""
+    """The deferred attempt: run the scope judge again with the saved findings (or, for a parked review, keep its
+    saved scope decision), then finish it as _rung does."""
     code, sig, out, rr = p["rung"], p["sig"], p["out"], p["rr"]
     with open(c.patch_path, "rb") as fh:
         patch = fh.read()
@@ -1056,6 +1074,8 @@ def _resume_rung(c, p: dict) -> dict:
         sa=SimpleNamespace(ok=True, failed=(), missing=(), lock_violations=(), run_errors=(),
                            other_failed=()) if sig["A"] is not None else None,
         aud=SimpleNamespace(**saved) if saved else None, green=True, patch=patch, row=p["row"])
+    if p["check"] == "review":
+        return _finish(c, at, p["sv"], SimpleNamespace(**p["jv"]) if p["jv"] else None, p["ref"])
     sv, jv, ref = _scope_decision(c, code, dres, patch, sig)
     if sv == "deferred":
         return _defer_scope(c, at, ref)
@@ -1106,7 +1126,7 @@ def _resume_base(c) -> int | None:
 
 
 def resume_task(c, p: dict) -> int:
-    """Continue a deferred task where it stopped: the plan judge, or the scope judge on the saved attempt."""
+    """Continue a deferred task where it stopped: the plan judge, or the scope judge or review C on the saved attempt."""
     if (code := _resume_base(c)) is not None:
         return code
     if (code := refuse_unparsed(c, c.base_set)) is not None:

@@ -174,7 +174,7 @@ class TestGuardDenied(ReviewCase):
         gitfix.write_check(self.dir, {"default": dict(CHECK_DEFAULT, five_hour_pct=84)})
         sig = self.run_review(risk="high")  # grok author, S denied, G-h is grok: no review at all
         self.assertTrue(sig.denied)
-        self.assertEqual(sig.verdict, "unclear")
+        self.assertEqual(sig.verdict, "unavailable")
         self.assertFalse(sig.ok)
         self.assertIn("not cross-family", sig.warning)
         self.assertFalse(os.path.exists(self.sp + ".calls.jsonl"))  # nothing ran
@@ -189,7 +189,7 @@ class TestReviewCli(ReviewCase):
 
     def test_mr_review_cli(self):
         self.setup({"claude": {SONNET: [{"result": _valid()},
-                                        {"result": _valid("fail")}]}})
+                                        {"result": _valid("fail").replace('"pass"', '"fail"', 1)}]}})
         cfgpath = os.path.join(self.dir, "routes.yaml")
         with open(cfgpath, "w") as fh:
             fh.write("paths:\n"

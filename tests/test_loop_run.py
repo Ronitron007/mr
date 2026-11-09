@@ -165,7 +165,7 @@ class TestCascade(LoopCase):
         # code medium [G-h, G-x, S]: both Grok rungs rejected by the S review, S rung still runs
         self.set_scenario({
             "cursor": {GH: [{"result": json.dumps(PLAN)}, mul("*"), {"result": REVIEW_PASS}],
-                       GX: [mul("*", "  # x")]},
+                       GX: [mul("*", "  # x"), {"result": REVIEW_PASS}]},
             "claude": {SONNET: [{"result": fail}, {"result": fail}, mul("*", "  # s")]}})
         code, doc, err = self.run_json("--type", "code", "--difficulty", "medium")
         self.assertEqual(code, 0, err)

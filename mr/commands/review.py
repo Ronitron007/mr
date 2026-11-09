@@ -61,4 +61,6 @@ def run(args) -> int:
         if sig.denied:
             line += " [claude denied; fallback reviewer]"
         print(line)
+    if sig.verdict == review.UNAVAILABLE:
+        return ec.DEFERRED
     return ec.OK if sig.ok else ec.NOT_ACCEPTED
