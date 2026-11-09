@@ -91,6 +91,7 @@ class _Ctx:
         self.handling = False  # set once a signal is being handled or we are finalising
         self.pending = self.head = None  # a check judge that could not run: the state.json block and the git HEAD
         self.deferred = self.resumed_from = None  # {check, status} of this run's defer; queued_at of a resumed one
+        self.refused = None  # {check, commands, reason} when mr refused to start the task
 
     @property
     def outcome(self) -> str:
@@ -450,7 +451,9 @@ def _body(c: _Ctx) -> int:
 
     c.reset_tree = patches.take_reset_tree(repo)
     c.save_state("rung")
-    base_set = hygiene.base_failures(repo, cfg, os.path.basename(repo), c.reset_tree)
+    base_set = hygiene.base_failures(repo, cfg, os.path.basename(repo))
+    if (code := loop.refuse_unparsed(c, base_set)) is not None:
+        return code
 
     rung = cfg.rungs[c.rung]
     with open(_PROMPT, encoding="utf-8") as fh:
@@ -600,6 +603,7 @@ def _task_record(c: _Ctx, ended: str) -> dict:
         "files_src": judge_mod.files_by_src(getattr(d, "files", None) or {}),
         **({"plan_rejected": True} if getattr(c, "plan_rejected", False) else {}),
         **({"deferred": c.deferred} if getattr(c, "deferred", None) else {}),
+        **({"refused": c.refused} if getattr(c, "refused", None) else {}),
         **({"resumed": True, "resumed_from_ts": c.resumed_from} if getattr(c, "resumed_from", None) else {}),
         **_deprecated(c),
         **_intake_counts(c),

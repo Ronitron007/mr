@@ -300,8 +300,7 @@ class TestHygiene(RunCase):
         self.cursor({"files": {"README.md": "# test repo\nfine\n"}})
         code, _, err = self.mr()
         self.assertEqual(code, 0, err)
-        cache = [n for n in os.listdir(os.path.join(self.home, "state")) if n.startswith("hygiene-repo-")]
-        self.assertEqual(len(cache), 1)  # base set computed once at reset_tree and cached
+        self.assertEqual(self.records("implementer")[0]["signals"]["H"], True)
 
 
 class TestLockAndGuard(RunCase):
