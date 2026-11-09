@@ -6,9 +6,11 @@ import os
 import unittest
 from unittest import mock
 
-from mr import cli, isolation, review
+from mr import cli, isolation, review, state
 from tests import gitfix
 from tests.test_advisor_loop import OPUS_USAGE, SF_TEXT, AdvisorLoopCase, block_result
+from tests.test_aj10_defer_mr import ALLOW, DeferCase
+from tests.test_aj5_run_mr import LOGIN, PATH_AUTH, AJ5Loop
 from tests.test_loop_run import GH, GX, PLAN, REVIEW_PASS, SONNET, LoopCase, mul
 from tests.test_review import ReviewCase
 
@@ -190,6 +192,69 @@ class TestAdvisorKeepsUnavailable(AdvisorLoopCase):
         self.assertEqual(code, 75, err)
         self.assertIn("reviewer unavailable", doc["reason"])
         self.assertNotEqual(self.state_of(doc["task"])["rungs"][-1]["class"], "spec_suspect")
+
+
+class ResumeCase(DeferCase):
+    def resume(self, task):
+        n = len(self.calls())
+        code, out, text = self.cli("--json", "resume", task)
+        return code, (json.loads(out) if out.strip().startswith("{") else {}), text, self.models()[n:]
+
+    def queued(self):
+        return state.read_queue(self.home)
+
+
+class TestReviewUnavailableResumes(ResumeCase):
+    """r9.unavailable_not_resumable: a reviewer-unavailable stop parks the task; mr resume runs only the review."""
+
+    def defer_review(self, reviews):
+        self.set_scenario({"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul("*")]},
+                           "claude": {SONNET: reviews}})
+        code, doc, text = self.go(*("--type", "bugfix", "--difficulty", "medium"))
+        self.assertEqual(code, 75, text)
+        self.assertIn("reviewer unavailable", doc["reason"])
+        return doc["task"]
+
+    def test_unavailable_review_resumes_with_only_a_reviewer_call(self):
+        tid = self.defer_review([CRASH, CRASH, {"result": REVIEW_PASS}])
+        st = self.state_of(tid)
+        self.assertEqual(st["next"], "check_judge")
+        self.assertEqual([(e["task"], e["check"]) for e in self.queued()], [(tid, "review")])
+        reviewer_prompt = self.prompts(SONNET)[0]
+        code, doc, text, called = self.resume(tid)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(doc.get("outcome"), "accepted", text)
+        self.assertEqual(called, [SONNET], "mr resume runs no planner and no implementer, only the review")
+        self.assertEqual(self.prompts(SONNET)[-1], reviewer_prompt, "the same reviewer gets the same requirements")
+        self.assertEqual(self.queued(), [])
+        self.assertEqual(self.state_of(tid)["next"], "done")
+
+    def test_second_unavailable_review_defers_again_with_one_queue_line(self):
+        tid = self.defer_review([CRASH, CRASH, CRASH, CRASH])
+        code, doc, text, called = self.resume(tid)
+        self.assertEqual(code, 75, text)
+        self.assertEqual(called, [SONNET, SONNET])
+        self.assertEqual([e["task"] for e in self.queued()], [tid], "no duplicate queue line")
+        self.assertEqual(self.state_of(tid)["next"], "check_judge")
+
+
+class TestDeniedStrongReviewResumes(ResumeCase, AJ5Loop):
+    repo_files = {**LoopCase.repo_files, **LOGIN}
+
+    def test_guard_denied_required_review_resumes_with_only_a_reviewer_call(self):
+        self.fresh({"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul("*")]},
+                    "claude": {SONNET: [{"result": REVIEW_PASS}]}}, pct=84.0)
+        self.env["MR_HOME"] = self.home
+        code, out, err = self.mr("--type", "bugfix", "--difficulty", "hard", text=PATH_AUTH)
+        self.assertEqual(code, 75, out + err)
+        doc = json.loads(out)
+        tid = doc["task"]
+        self.assertEqual([(e["task"], e["check"]) for e in self.queued()], [(tid, "review")], doc["reason"])
+        self.guard(ALLOW)
+        code, doc, text, called = self.resume(tid)
+        self.assertEqual(code, 0, text)
+        self.assertEqual(called, [SONNET], "mr resume runs only the required review")
+        self.assertEqual(self.queued(), [])
 
 
 if __name__ == "__main__":

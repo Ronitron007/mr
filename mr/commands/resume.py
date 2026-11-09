@@ -1,4 +1,4 @@
-"""`mr resume <task>`: continue a task that waited for a check judge (state.json next "check_judge").
+"""`mr resume <task>`: continue a task that waited for a check judge or review C (state.json next "check_judge").
 
 The harness (context, records, output, signals) is mr.commands.run's; the loop picks the task up where it stopped.
 """
@@ -20,7 +20,7 @@ def _say(msg: str) -> None:
 
 
 def _deferred(home: str, task_id: str) -> tuple[dict, dict] | None:
-    """(state.json, queue entry) of a task that waits for its judge, else None."""
+    """(state.json, queue entry) of a task that waits for its judge or review, else None."""
     try:
         st = state.read_state(home, task_id)
     except ValueError:
