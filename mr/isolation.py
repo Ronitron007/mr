@@ -85,20 +85,20 @@ class GitSnap:
     branch: str | None
     worktrees: tuple[str, ...]
     status: tuple[str, ...]
-    refs: tuple[str, ...]
+    refs: tuple[tuple[str, str], ...]  # sorted (refname, object id)
     stash: tuple[str, ...]
 
 
 def snapshot(tree: str) -> GitSnap:
     head = _git(tree, "rev-parse", "HEAD")
     wts = tuple(ln[len("worktree "):] for ln in _lines(tree, "worktree", "list", "--porcelain") if ln.startswith("worktree "))
-    refs = _lines(tree, "for-each-ref", "--format=%(refname)", "refs/heads", "refs/remotes", "refs/tags")
+    refs = _lines(tree, "for-each-ref", "--format=%(refname) %(objectname)", "refs/heads", "refs/remotes", "refs/tags")
     return GitSnap(
         head=head.stdout.strip() if head.returncode == 0 and head.stdout.strip() else None,
         branch=_branch(tree),
         worktrees=wts,
         status=_lines(tree, "status", "--porcelain"),
-        refs=tuple(sorted(refs)),
+        refs=tuple(sorted(tuple(ln.rsplit(" ", 1)) for ln in refs)),
         stash=_lines(tree, "stash", "list"),
     )
 
@@ -112,13 +112,17 @@ def violation(before: GitSnap, after: GitSnap, *, allow_new_branch: str | None =
     if before.worktrees != after.worktrees:
         return "worktree list changed"
     allowed = f"refs/heads/{allow_new_branch}" if allow_new_branch else None
-    old, new = set(before.refs), set(after.refs)
-    added = sorted(new - old - {allowed})
+    old, new = dict(before.refs), dict(after.refs)
+    added = sorted(new.keys() - old.keys() - {allowed})
     if added:
         return "ref added: " + ", ".join(added[:3])
-    removed = sorted(old - new)
+    removed = sorted(old.keys() - new.keys())
     if removed:
         return "ref removed: " + ", ".join(removed[:3])
+    # a child `git fetch` moves refs/remotes/*; that is not damage
+    moved = sorted(r for r in old.keys() & new.keys() if old[r] != new[r] and not r.startswith("refs/remotes/"))
+    if moved:
+        return "ref moved: " + ", ".join(moved[:3])
     if before.stash != after.stash:
         return "stash changed"
     return None

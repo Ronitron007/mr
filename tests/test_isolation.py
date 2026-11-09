@@ -118,7 +118,7 @@ class TestSnapshot(Base):
         self.assertEqual(s.branch, "main")
         self.assertEqual(s.head, gitfix.head(self.repo))
         self.assertIn("?? foreign.txt", s.status)
-        self.assertEqual(s.refs, ("refs/heads/main",))
+        self.assertEqual(s.refs, (("refs/heads/main", gitfix.head(self.repo)),))
         self.assertEqual(len(s.worktrees), 1)
         gitfix.git(self.repo, "checkout", "--detach")
         self.assertIsNone(self.snap().branch)
@@ -289,7 +289,7 @@ class TestBranch(Base):
         self.assertEqual(snap.branch, new)
         self.assertEqual(snap.head, before)
         self.assertIsNone(iso.violation(iso.GitSnap(snap.head, new, snap.worktrees, snap.status,
-                                                    tuple(r for r in snap.refs if r != f"refs/heads/{new}"),
+                                                    tuple(r for r in snap.refs if r[0] != f"refs/heads/{new}"),
                                                     snap.stash), snap, allow_new_branch=new))
         gitfix.git(self.repo, "checkout", "--detach")
         orig2, _ = iso.create_branch_w5(self.repo, "t-abcd5678", "again")
