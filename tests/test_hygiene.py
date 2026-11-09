@@ -11,7 +11,7 @@ import unittest
 from mr import config, hygiene
 from mr.defaults import defaults
 
-_TSC = re.compile(r"^(?P<file>[^\s(]+)\(\d+,\d+\): error (?P<code>TS\d+)")
+_TSC = re.compile(r"^(?P<file>[^\s(]+)\(\d+,\d+\): error (?P<code>TS\d+)(?P<msg>.*)")
 _LINT = re.compile(r"^(?P<file>[\w./-]+):(\d+):(\d+)")
 
 
@@ -20,6 +20,12 @@ def _lint_id(line: str) -> str:
     file = _LINT.match(line).group("file")
     bare = re.sub(r"\d+", "", line)
     return "lint:" + file + ":" + hashlib.sha1(bare.encode()).hexdigest()[:8]
+
+
+def _tsc_id(line: str) -> str:
+    m = _TSC.match(line)
+    bare = re.sub(r"\d+", "", m.group("msg"))
+    return f"tsc:{m.group('file')}:{m.group('code')}:" + hashlib.sha1(bare.encode()).hexdigest()[:8]
 
 
 def _cfg(home, commands, hygiene_s=30):
@@ -76,8 +82,9 @@ class TestHygiene(unittest.TestCase):
                    "print('note: not an error')\n")
         got = hygiene.run_checks(self.tree, ["python3 emit_tsc.py"], 10)
         self.assertEqual(got, frozenset({
-            "tsc:src/a.ts:TS2322",
-            "tsc:src/b.ts:TS2304",
+            _tsc_id("src/a.ts(1,1): error TS2322: nope"),
+            _tsc_id("src/a.ts(4,2): error TS2322: again"),
+            _tsc_id("src/b.ts(3,1): error TS2304: missing"),
         }))
 
     def test_vitest_json(self):
@@ -151,7 +158,7 @@ class TestHygiene(unittest.TestCase):
         self.assertEqual(first, second)
         with open(os.path.join(self.tree, "runs.count"), encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "1")
-        cache = os.path.join(self.home, "state", "hygiene-demo-deadbeef.json")
+        cache = os.path.join(self.home, "state", "hygiene-demo-deadbeef.v2.json")
         with open(cache, encoding="utf-8") as fh:
             self.assertEqual(json.load(fh)["failures"], sorted(first))
 
@@ -164,9 +171,9 @@ class TestHygiene(unittest.TestCase):
         sig = hygiene.hygiene(
             self.tree, cfg, frozenset(), "demo",
             locked_ids=frozenset({"src/locked.test.ts"}))
-        self.assertEqual(sig.failures, frozenset({"tsc:src/app.ts:TS2304"}))
-        self.assertEqual(sig.new_failures, ("tsc:src/app.ts:TS2304",))
-        self.assertNotIn("tsc:src/locked.test.ts:TS2322", sig.failures)
+        real = _tsc_id("src/app.ts(2,1): error TS2304: real")
+        self.assertEqual(sig.failures, frozenset({real}))
+        self.assertEqual(sig.new_failures, (real,))
 
     def test_no_commands_skipped(self):
         cfg = _cfg(self.home, {"demo": ["python3 check.py"]})

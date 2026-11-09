@@ -541,7 +541,6 @@ def _plan_finish(c, res, row, stronger: bool = False) -> int | None:
     c.locked = tuple(t["path"] for t in res.checklist["tests"])
     with open(os.path.join(state.task_dir(cfg.paths.home, task.id), "tests.lock"), encoding="utf-8") as fh:
         c.lockdoc = json.load(fh)
-    c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
     c.prior = []  # the two-model rule counts only attempts after a (re-)plan
     return None
 
@@ -554,7 +553,6 @@ def _plan_less(c) -> None:
     c.plan_rejected = True
     c.checklist, c.locked, c.lockdoc = None, (), None
     c.d = replace(c.d, needs_review=True, required_review=router.at_least(c.d.required_review, "S+"))
-    c.base_set = hygiene.base_failures(c.task.repo, c.cfg, os.path.basename(c.task.repo), c.reset_tree)
     c.prior = []
 
 
@@ -1076,12 +1074,12 @@ def run_task(c) -> int:
     if not c.ladder:
         return c.stop(exitcodes.NOT_ACCEPTED, "empty ladder after the budget filter")
     c.reset_tree = patches.take_reset_tree(task.repo)
+    # the baseline is the tree before the planner writes its red tests, so they cannot hide a new failure
+    c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
     c.save_state("plan")
     if d.planner or (d.route == "cascade" and _DIFFS.index(d.difficulty) >= _DIFFS.index("medium")):
         if (code := _plan(c)) is not None:
             return code
-    else:
-        c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
     return _ladder(c, c.ladder[0], "implementer", "(first attempt)")
 
 
