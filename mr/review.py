@@ -65,6 +65,13 @@ def parse_review(text: str) -> dict | None:
     return data
 
 
+def _norm_id(id_: str) -> str:
+    """Fold case and one trailing ``.`` or ``:``, so ``r1`` and ``R1.`` count as R1. mr's ids (R<n>, ADV<n>, TASK)
+    cannot collide under this."""
+    id_ = id_.strip().upper()
+    return id_[:-1] if id_[-1:] in (".", ":") else id_
+
+
 def verdict(doc: dict | None, ids: list[str] | None) -> str | None:
     """mr's verdict from a parsed MR_REVIEW; None when the reply breaks the contract (re-ask, like bad JSON).
 
@@ -74,7 +81,7 @@ def verdict(doc: dict | None, ids: list[str] | None) -> str | None:
     if doc is None:
         return None
     items = doc["items"]
-    if not items or (ids is not None and sorted(it["id"].strip() for it in items) != sorted(ids)):
+    if not items or (ids is not None and sorted(_norm_id(it["id"]) for it in items) != sorted(map(_norm_id, ids))):
         return None
     if doc["overall"] == "fail" or any(it["verdict"] == "fail" for it in items):
         return "fail"

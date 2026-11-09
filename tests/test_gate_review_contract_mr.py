@@ -257,5 +257,18 @@ class TestDeniedStrongReviewResumes(ResumeCase, AJ5Loop):
         self.assertEqual(self.queued(), [])
 
 
+class TestIdNormalized(ReviewCase):
+    """r9.reask_no_feedback: a requirement id in another case or with one trailing dot or colon still counts."""
+
+    def test_lowercase_and_trailing_dot_ids_are_accepted(self):
+        reqs = R1 + [{"id": "R2", "text": "keeps order"}]
+        for ids in (["r1", "R2"], ["R1.", "r2:"]):
+            with self.subTest(ids=ids):
+                self.setup({"claude": {SONNET: [{"result": mr_review([item(i, "pass") for i in ids])}]}})
+                sig = review.review("diff", reqs, None, "grok-4.7-high", "medium", cfg=self.cfg,
+                                    tree=self.repo, task_id="t1", attempt=1, task_text=TASK_TEXT)
+                self.assertEqual((sig.verdict, sig.ok, sig.attempts), ("pass", True, 1))
+
+
 if __name__ == "__main__":
     unittest.main()
