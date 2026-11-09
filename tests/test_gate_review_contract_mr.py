@@ -4,9 +4,11 @@ import io
 import json
 import os
 import unittest
+from unittest import mock
 
-from mr import cli, review
+from mr import cli, isolation, review
 from tests import gitfix
+from tests.test_advisor_loop import OPUS_USAGE, SF_TEXT, AdvisorLoopCase, block_result
 from tests.test_loop_run import GH, GX, PLAN, REVIEW_PASS, SONNET, LoopCase, mul
 from tests.test_review import ReviewCase
 
@@ -159,6 +161,35 @@ class TestRunOverallFail(LoopCase):
         st = self.state_of(doc["task"])
         self.assertEqual([(r["rung"], r["class"]) for r in st["rungs"]], [("G-x", "tried_wrong"), ("S", None)],
                          "the overall fail rejects the G-x attempt")
+
+
+class TestAdvisorKeepsUnavailable(AdvisorLoopCase):
+    """r9.adv_overwrites_unavailable: the advisor outcome does not replace a reviewer-unavailable stop."""
+
+    def run_critical(self, impl_result):
+        self.set_scenario({
+            "cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [{"result": "junk"}, {"result": "junk again"}]},
+            "claude": {SONNET: [dict(mul("*"), advisor=dict(OPUS_USAGE), result=impl_result)]}})
+        with mock.patch.object(isolation, "decide_isolation", return_value="W7"):
+            return self.run_json("--type", "bugfix", "--difficulty", "critical", "--rung", "S+", text=SF_TEXT)
+
+    def test_advisor_block_and_reviewer_junk_twice_exit_75(self):
+        code, doc, err = self.run_critical(block_result())
+        self.assertEqual(code, 75, err)
+        self.assertIn("reviewer unavailable", doc["reason"])
+        self.assertNotIn("C reviewed", doc["reason"])
+
+    def test_advisor_block_pushback_and_reviewer_junk_twice_exit_75(self):
+        relay = "MR_ADVISOR " + json.dumps({"slot": "early", "verdict": "block", "risks": [
+            {"what": "late event", "where": "mul.py:1", "severity": "high", "test": "x"}],
+            "missing_test": None, "confidence": 0.9, "approach": "change", "relayed": "verbatim"})
+        pushback = "stopped\n" + relay + "\nMR_RESULT " + json.dumps({
+            "item": None, "status": "pushback", "requirements": [], "deviations": [],
+            "pushback": {"type": "advisor_block", "evidence": "advisor says no"}, "confidence": 0.5})
+        code, doc, err = self.run_critical(pushback)
+        self.assertEqual(code, 75, err)
+        self.assertIn("reviewer unavailable", doc["reason"])
+        self.assertNotEqual(self.state_of(doc["task"])["rungs"][-1]["class"], "spec_suspect")
 
 
 if __name__ == "__main__":

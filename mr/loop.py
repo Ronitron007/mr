@@ -840,7 +840,7 @@ def _finish(c, at, sv, jv, ref) -> dict:
             out.update(_classify(c, rung, at.rr, dres, at.hres, at.sa, rv, at.infra, judged, sv))
             if out["J"]:
                 out["why"] += "; scope judge: " + out["J"][0]
-        if code == "S+A":
+        if code == "S+A" and not (rv is not None and (rv.deferred or rv.verdict == review.UNAVAILABLE)):
             out.update(_adv_verdict(c, at.rr, aud, green, out["cls"]))
     out["keep"] = (not at.viol and not at.infra and (d_kept or out["cls"] == "scope_repair")
                    and len(out["A"]) <= _MAX_FAILING_A and len(out["H"]) <= _MAX_NEW_H)
