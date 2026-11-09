@@ -158,6 +158,10 @@ def _violation(cwd, kind):
         _git(cwd, "checkout", "-b", "evil-switch")
     elif kind == "tag":
         _git(cwd, "tag", "evil-tag")
+    elif kind == "retarget":
+        _git(cwd, "branch", "-f", "keep-me", "HEAD")
+    elif kind == "remote_move":
+        _git(cwd, "update-ref", "refs/remotes/origin/main", "HEAD")
     elif kind == "stash":
         with open(os.path.join(cwd, "evil-stash.txt"), "w", encoding="utf-8") as f:
             f.write("stash me\n")
