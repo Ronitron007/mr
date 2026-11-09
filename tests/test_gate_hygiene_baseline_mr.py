@@ -101,6 +101,14 @@ class TestFailureIds(unittest.TestCase):
         got = hygiene._parse(self.tree, "pytest -q", 1, summary, "")
         self.assertEqual(got, {"pytest:tests/test_a.py:FAILED ::A::test_known", "pytest:tests/test_c.py:ERROR "})
 
+    def test_new_command_list_misses_the_old_base_cache(self):
+        # verify finding h.cache_key_ignores_commands
+        home = os.path.join(self.tree, ".home")
+        old = hygiene.base_failures(self.tree, _cfg(home, {"demo": ["echo src/a.ts:1:1: old; exit 1"]}), "demo", "t")
+        new = hygiene.base_failures(self.tree, _cfg(home, {"demo": ["echo src/b.ts:1:1: new; exit 1"]}), "demo", "t")
+        self.assertEqual([f.split(":")[1] for f in old], ["src/a.ts"])
+        self.assertEqual([f.split(":")[1] for f in new], ["src/b.ts"])
+
     def test_repeated_diagnostic_is_new(self):
         line = "src/a.ts(3,1): error TS2322: Type 'string' is not assignable to type 'number'.\n"
         base = hygiene._parse(self.tree, "npx tsc --noEmit", 2, line, "")

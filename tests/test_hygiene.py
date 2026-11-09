@@ -1,5 +1,6 @@
 """Signal H: base-relative hygiene (spec §5.9, §10.3, AC-SIG-4)."""
 import hashlib
+import glob
 import json
 import os
 import re
@@ -158,7 +159,7 @@ class TestHygiene(unittest.TestCase):
         self.assertEqual(first, second)
         with open(os.path.join(self.tree, "runs.count"), encoding="utf-8") as fh:
             self.assertEqual(fh.read(), "1")
-        cache = os.path.join(self.home, "state", "hygiene-demo-deadbeef.v2.json")
+        [cache] = glob.glob(os.path.join(self.home, "state", "hygiene-demo-deadbeef-*.v2.json"))
         with open(cache, encoding="utf-8") as fh:
             self.assertEqual(json.load(fh)["failures"], sorted(first))
 

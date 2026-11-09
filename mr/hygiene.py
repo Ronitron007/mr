@@ -165,11 +165,13 @@ def _commands(cfg, repo_name) -> list[str]:
 
 
 def base_failures(tree, cfg, repo_name, reset_tree) -> frozenset[str]:
-    path = os.path.join(cfg.paths.home, "state", f"hygiene-{repo_name}-{reset_tree}.v{ID_FORMAT}.json")
+    commands = _commands(cfg, repo_name)
+    key = hashlib.sha1(json.dumps(commands).encode()).hexdigest()[:12]
+    path = os.path.join(cfg.paths.home, "state", f"hygiene-{repo_name}-{reset_tree}-{key}.v{ID_FORMAT}.json")
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as fh:
             return frozenset(json.load(fh)["failures"])
-    fails = run_checks(tree, _commands(cfg, repo_name), cfg.timeouts.hygiene_s)
+    fails = run_checks(tree, commands, cfg.timeouts.hygiene_s)
     if not unparsed(cfg, repo_name, fails):  # a refused base is measured again on the next run
         _atomic_json(path, {"failures": sorted(fails)})
     return fails
