@@ -1,8 +1,12 @@
-"""gate.review_contract: mr derives signal C from the reviewer's items, not from its overall (issue #1 findings 3, 8)."""
+"""gate.review_contract: mr derives signal C from the reviewer's items and its overall (issue #1 findings 3, 8)."""
+import contextlib
+import io
 import json
+import os
 import unittest
 
-from mr import review
+from mr import cli, review
+from tests import gitfix
 from tests.test_loop_run import GH, GX, PLAN, REVIEW_PASS, SONNET, LoopCase, mul
 from tests.test_review import ReviewCase
 
@@ -112,6 +116,49 @@ class TestRunEndToEnd(LoopCase):
         self.assertEqual([r["rung"] for r in st["rungs"]], ["G-x"])
         self.assertTrue(st["patch"])
         self.assertEqual(self.only_task()["risk"], "low")
+
+
+class TestOverallFailFails(ReviewCase):
+    """r9.overall_fail_ignored: an overall fail fails the review, also when every item passes."""
+
+    def run_reqs(self, replies, reqs=R1):
+        self.setup({"claude": {SONNET: [{"result": t} for t in replies]}})
+        return review.review("diff", reqs, None, "grok-4.7-high", "medium", cfg=self.cfg,
+                             tree=self.repo, task_id="t1", attempt=1, task_text=TASK_TEXT)
+
+    def test_all_items_pass_with_overall_fail_is_fail(self):
+        sig = self.run_reqs([mr_review([item("R1", "pass")], "fail")])
+        self.assertEqual((sig.verdict, sig.ok, sig.attempts), ("fail", False, 1))
+
+    def test_plan_less_task_pass_with_overall_fail_is_fail(self):
+        sig = self.run_reqs([mr_review([item("TASK", "pass")], "fail")], reqs=None)
+        self.assertEqual((sig.verdict, sig.ok), ("fail", False))
+
+    def test_mr_review_exits_1_for_overall_fail(self):
+        self.setup({"claude": {SONNET: [{"result": mr_review([item("TASK", "pass")], "fail")}]}})
+        cfgpath = os.path.join(self.dir, "routes.yaml")
+        with open(cfgpath, "w") as fh:
+            fh.write(f"paths:\n  claude: {gitfix.FAKE_CLAUDE}\n  check: {gitfix.FAKE_CHECK}\n"
+                     f"  cursor_agent: {gitfix.FAKE_CURSOR}\n  home: {self.home}\n")
+        with open(os.path.join(self.repo, "new.txt"), "w") as fh:
+            fh.write("hello\n")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            code = cli.main(["--config", cfgpath, "--json", "review", "--repo", self.repo])
+        self.assertEqual(code, 1, out.getvalue())
+        self.assertEqual(json.loads(out.getvalue().strip())["verdict"], "fail")
+
+
+class TestRunOverallFail(LoopCase):
+    def test_overall_fail_with_all_items_pass_is_not_accepted(self):
+        self.set_scenario({
+            "cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul("*"), {"result": REVIEW_PASS}]},
+            "claude": {SONNET: [{"result": mr_review([item("R1", "pass")], "fail")}, mul("*", "  # s")]}})
+        code, doc, err = self.run_json("--type", "bugfix", "--difficulty", "medium", text=TASK_TEXT)
+        self.assertEqual(code, 0, err)
+        st = self.state_of(doc["task"])
+        self.assertEqual([(r["rung"], r["class"]) for r in st["rungs"]], [("G-x", "tried_wrong"), ("S", None)],
+                         "the overall fail rejects the G-x attempt")
 
 
 if __name__ == "__main__":

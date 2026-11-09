@@ -69,14 +69,14 @@ def verdict(doc: dict | None, ids: list[str] | None) -> str | None:
     """mr's verdict from a parsed MR_REVIEW; None when the reply breaks the contract (re-ask, like bad JSON).
 
     With requirement ``ids`` the items cover each id exactly once, in any order; with none (plan-less) there
-    is at least one item. Any failed item fails; the reviewer's overall can only turn all-pass into unclear.
+    is at least one item. Any failed item or an overall fail fails; else an overall unclear is unclear.
     """
     if doc is None:
         return None
     items = doc["items"]
     if not items or (ids is not None and sorted(it["id"].strip() for it in items) != sorted(ids)):
         return None
-    if any(it["verdict"] == "fail" for it in items):
+    if doc["overall"] == "fail" or any(it["verdict"] == "fail" for it in items):
         return "fail"
     return "unclear" if doc["overall"] == "unclear" else "pass"
 
