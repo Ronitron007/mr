@@ -5,6 +5,7 @@ The harness (context, records, output, signals) is mr.commands.run's; the loop p
 from __future__ import annotations
 
 import argparse
+import os
 import sys
 import time
 
@@ -31,7 +32,7 @@ def _deferred(home: str, task_id: str) -> tuple[dict, dict] | None:
     return (st, entry) if entry else None
 
 
-def _refusal(st: dict) -> str | None:
+def _refusal(st: dict, home: str) -> str | None:
     """Why the repo is not as the deferred run left it, or None. Nothing is changed."""
     repo, task_id = st["repo"], st["task"]
     head = pipeline.git(repo, "rev-parse", "HEAD").stdout.strip() or None
@@ -39,7 +40,10 @@ def _refusal(st: dict) -> str | None:
         return f"{task_id}: HEAD moved since it was deferred (saved {st.get('head')}, now {head}); nothing was changed"
     now = patches.take_reset_tree(repo)
     if now != st["pending"]["tree"]:
-        return f"{task_id}: the work tree changed since it was deferred; nothing was changed"
+        aside = loop.base_aside(home, task_id)
+        hint = (f"; an earlier mr resume stopped while the planner's tests were in {aside}, move them back"
+                if os.path.isdir(aside) else "")
+        return f"{task_id}: the work tree changed since it was deferred{hint}; nothing was changed"
     if now != st.get("reset_point"):
         return (f"{task_id}: the work tree is not at its reset tree ({st.get('reset_point')}), so mr cannot "
                 "measure the hygiene base again; nothing was changed")
@@ -82,7 +86,7 @@ def run(args) -> int:
              "then empty the lock file")
         return ec.UNSAFE_GIT
     try:
-        if (why := _refusal(st)) is not None:
+        if (why := _refusal(st, home)) is not None:
             _say(f"mr resume: {why}")
             lock.release()
             return ec.TREE_MOVED

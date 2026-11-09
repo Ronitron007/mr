@@ -37,6 +37,13 @@ def _scale() -> float:
         return 1.0
 
 
+def _kill(pgid: int) -> None:
+    try:
+        os.killpg(pgid, signal.SIGKILL)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
 def _run(tree: str, cmd: str, timeout_s) -> tuple[int, str, str, bool]:
     proc = subprocess.Popen(
         cmd, cwd=tree, shell=True, stdin=subprocess.DEVNULL,
@@ -46,11 +53,12 @@ def _run(tree: str, cmd: str, timeout_s) -> tuple[int, str, str, bool]:
         timed = False
     except subprocess.TimeoutExpired:
         timed = True
-        try:
-            os.killpg(proc.pid, signal.SIGKILL)
-        except (ProcessLookupError, PermissionError):
-            pass
+        _kill(proc.pid)
         out_b, err_b = proc.communicate()
+    except BaseException:  # a signal: the command runs in its own session, so stop it before mr moves on
+        _kill(proc.pid)
+        proc.wait()
+        raise
     out = (out_b or b"").decode("utf-8", "replace")
     err = (err_b or b"").decode("utf-8", "replace")
     return proc.returncode or 0, out, err, timed

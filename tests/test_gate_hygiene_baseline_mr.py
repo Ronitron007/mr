@@ -1,4 +1,6 @@
 """gate.hygiene_baseline: H baseline on the pre-planner tree, per-case failure ids (issue 1, findings 1 and 7)."""
+import copy
+import hashlib
 import json
 import os
 import shutil
@@ -7,11 +9,14 @@ import sys
 import tempfile
 import unittest
 
-from mr import config, hygiene
+from mr import config, hygiene, patches
 from mr.defaults import defaults
-from tests.test_aj10_defer_mr import ALLOW, verdict
+from tests.test_aj10_defer_mr import ALLOW, DENY, MEDIUM, STRAY, verdict
 from tests.test_aj10_resume_mr import ResumeCase
-from tests.test_loop_run import GL, GM, LoopCase
+from tests.test_loop_run import GH, GL, GM, GX, SONNET, TEST_PATH, LoopCase, mul
+from tests.test_loop_run import PLAN as MUL_PLAN
+from tests.test_loop_run import REVIEW_PASS as MUL_REVIEW_PASS
+from tests.test_run_once import SRC
 
 OLD_TEST = ("import unittest\nimport calc\n\n\nclass Old(unittest.TestCase):\n"
             "    def test_old(self):\n        self.assertEqual(calc.old(), 1)\n")
@@ -308,6 +313,109 @@ class TestResumeMeasuresBase(ResumeCase):
         last = self.state_of(doc["task"])["rungs"][-1]
         self.assertEqual(last["rung"], "G-m", last)
         self.assertIs(last["signals"]["H"], True, last)
+
+
+# The planner's red test stubs calc.f and fails before it puts it back, so test_z is red on the post-plan tree only.
+LEAKY_RED = ("import calc\nimport unittest\n\n\nclass TestMul(unittest.TestCase):\n"
+             "    def test_mul_basic(self):\n        old = calc.f\n        calc.f = lambda: 9\n"
+             "        import mul\n        self.assertEqual(mul.mul(2, 3), 6)\n        calc.f = old\n")
+VICTIM = ("import calc, unittest\n\n\nclass Z(unittest.TestCase):\n"
+          "    def test_z(self):\n        self.assertEqual(calc.f(), 1)\n")
+LEAK_PLAN = copy.deepcopy(MUL_PLAN)
+LEAK_PLAN["tests"][0]["content"] = LEAKY_RED
+LEAK_PLAN["scope"]["modify"] = ["README.md", "calc.py"]
+BREAKS_CALC = {"files": {"mul.py": "def mul(a, b):\n    return a * b\n", "calc.py": "def f():\n    return 9\n"}}
+
+
+class TestResumeBaseWithoutPlannerTests(ResumeCase):
+    """Verify finding h.postplan_base_leak: the resumed base is the pre-plan tree, so a real regression fails H."""
+    repo_files = {**LoopCase.repo_files, "tests/test_zcalc.py": VICTIM, "calc.py": "def f():\n    return 1\n"}
+    hygiene_cmds = [DISCOVER]
+
+    def test_regression_after_a_scope_defer_is_not_accepted(self):
+        self.set_scenario({"cursor": {GH: [{"result": json.dumps(LEAK_PLAN)}],
+                                      GX: [{"files": {**mul("*")["files"], STRAY: "x\n"}}]},
+                           "claude": {SONNET: [verdict("reject", "the stray file is not wanted"), BREAKS_CALC,
+                                               {"result": MUL_REVIEW_PASS}, {"result": MUL_REVIEW_PASS}]}},
+                          check=DENY)
+        code, doc, text = self.go(*MEDIUM)
+        self.assertEqual(code, 75, text)
+        tid = doc["task"]
+        self.guard(ALLOW)
+        code, _, text = self.resume(tid)
+        st = self.state_of(tid)
+        self.assertNotEqual(code, 0, text)
+        self.assertNotEqual(st["outcome"], "accepted", st["rungs"])
+        broke = [r for r in st["rungs"] if r["rung"] == "S"]
+        self.assertTrue(broke, st["rungs"])
+        self.assertIs(broke[0]["signals"]["H"], False, broke)
+        self.assertTrue(self.exists(TEST_PATH), "the locked test is back on the tree")
+
+
+class TestResumeBaseInterrupted(ResumeCase):
+    """A signal or a crash while the planner's tests are aside puts them back or leaves the task refused."""
+
+    def setUp(self):
+        super().setUp()
+        self.flag = os.path.join(self.dir, "kill-on-base")
+
+    def defer(self, action):
+        self.hygiene_cmds = [f"if [ -f {self.flag} ] && [ ! -f {TEST_PATH} ]; then {action}; fi; " + DISCOVER]
+        self.write_cfg()
+        self.set_scenario({"cursor": {GH: [{"result": json.dumps(MUL_PLAN)}],
+                                      GX: [{"files": {**mul("*")["files"], STRAY: "x\n"}}]},
+                           "claude": {SONNET: [verdict("accept", "harmless"), {"result": MUL_REVIEW_PASS}]}},
+                          check=DENY)
+        code, doc, text = self.go(*MEDIUM)
+        self.assertEqual(code, 75, text)
+        self.guard(ALLOW)
+        with open(self.flag, "w", encoding="utf-8"):
+            pass
+        return doc["task"], self.state_of(doc["task"])
+
+    def resume_process(self, tid):
+        proc = subprocess.run([sys.executable, "-m", "mr", "--config", self.cfgpath, "--json", "resume", tid],
+                              cwd=SRC, env=self.env, capture_output=True, text=True, timeout=120)
+        return proc.returncode, proc.stdout + proc.stderr
+
+    def locked_sha(self, tid):
+        with open(os.path.join(self.home, "tasks", tid, "tests.lock"), encoding="utf-8") as fh:
+            return json.load(fh)["files"][TEST_PATH]["sha256"]
+
+    def test_sigterm_during_the_resumed_base_puts_the_locked_tests_back(self):
+        tid, st = self.defer("kill -TERM $PPID; sleep 2")
+        before = len(self.calls())
+        code, text = self.resume_process(tid)
+        self.assertEqual(code, 143, text)
+        self.assertEqual(len(self.calls()), before, "no model call")
+        with open(os.path.join(self.repo, TEST_PATH), "rb") as fh:
+            self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), self.locked_sha(tid))
+        self.assertEqual(patches.take_reset_tree(self.repo), st["reset_point"], "the tree is at its reset tree")
+
+    def test_kill_during_the_resumed_base_leaves_the_task_refused(self):
+        tid, st = self.defer("kill -KILL $PPID; sleep 2")
+        before = len(self.calls())
+        code, text = self.resume_process(tid)
+        self.assertEqual(code, -9, text)
+        self.assertFalse(self.exists(TEST_PATH))
+        aside = os.path.join(self.home, "tasks", tid, "base-aside", TEST_PATH)
+        with open(aside, "rb") as fh:
+            self.assertEqual(hashlib.sha256(fh.read()).hexdigest(), self.locked_sha(tid), "kept, not lost")
+        for path in os.listdir(os.path.join(self.home, "state")):
+            if path.endswith(".lock"):
+                open(os.path.join(self.home, "state", path), "w").close()  # what the stale-lock line asks for
+        code, _, text = self.resume(tid)
+        self.assertEqual(code, 6, text)
+        self.assertIn("base-aside", text)
+        self.assertEqual(len(self.calls()), before, "no model call")
+
+    def test_a_changed_locked_test_after_the_resumed_base_exits_4(self):
+        tid, st = self.defer(f"for f in {self.home}/tasks/*/base-aside/{TEST_PATH}; do echo '# edited' >> $f; done")
+        before = len(self.calls())
+        code, _, text = self.resume(tid)
+        self.assertEqual(code, 4, text)
+        self.assertIn("the locked tests changed while mr measured the hygiene base: " + TEST_PATH, text)
+        self.assertEqual(len(self.calls()), before, "no model call")
 
 
 if __name__ == "__main__":
