@@ -13,6 +13,9 @@ from tests.test_run_once import CHECK_DEFAULT
 
 SF_TEXT = "Fix the event stream race: a late event regresses the state machine status in mul.py."
 OPUS_USAGE = {"inputTokens": 40000, "outputTokens": 1500, "costUSD": 0.19}
+REVIEW_PASS_ADV = "MR_REVIEW " + json.dumps({"items": [  # C covers the relayed risk ADV1 as well as R1
+    {"id": "R1", "verdict": "pass", "evidence": "mul.py:2"},
+    {"id": "ADV1", "verdict": "pass", "evidence": "mul.py:1"}], "overall": "pass"})
 
 
 def block_result():
@@ -141,7 +144,7 @@ class TestAdvisorRungs(AdvisorLoopCase):
 
     def test_block_relayed_checks_pass_critical_exit3(self):  # AC-ADV-6: one §6.3 row
         self.set_scenario(
-            {"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [{"result": REVIEW_PASS}]},
+            {"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [{"result": REVIEW_PASS_ADV}]},
              "claude": {"claude-sonnet-5-5": [
                  dict(mul("*"), advisor=dict(OPUS_USAGE), result=block_result())]}})
         # critical forces W4 (worktrees, not built in v1) before any rung; force W7 to reach the loop

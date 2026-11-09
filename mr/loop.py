@@ -833,6 +833,9 @@ def _finish(c, at, sv, jv, ref) -> dict:
             c.frees_hint = guard.check(rv.reviewer, cfg).frees_hint or "≈ in 60 min"
             out.update(stop=exitcodes.DEFERRED, why=f"required review {rv.reviewer} denied by the guard on a "
                        f"high-risk task; the patch is saved in {c.patch_path}")
+        elif rv is not None and rv.verdict == review.UNAVAILABLE:  # no verdict: never accepted, no rung burnt
+            out.update(stop=exitcodes.DEFERRED, why=f"reviewer unavailable: {rv.warning}; the patch is saved in "
+                       f"{c.patch_path}")
         elif not green or (rv is not None and not rv.ok):
             out.update(_classify(c, rung, at.rr, dres, at.hres, at.sa, rv, at.infra, judged, sv))
             if out["J"]:
@@ -866,11 +869,13 @@ def _review(c, rung, patch: bytes, extra_reqs=None):
     untested = getattr(c, "uncovered_reqs", ())
     if reqs and untested:  # the plan judge let these through without a locked test
         reqs = [dict(r, text=NO_TEST + r["text"]) if r["id"] in untested else r for r in reqs]
-    if extra_reqs:
-        reqs = list(reqs or []) + list(extra_reqs)
+    if extra_reqs:  # plan-less, the task stays an item beside the relayed risks
+        task_item = {"id": review.TASK_ID, "text": "the patch does what the TASK asks"}
+        reqs = list(reqs or [task_item]) + list(extra_reqs)
     rv = review.review(patch.decode("utf-8", "replace"), reqs,
                        None, rung.model, c.d.risk, cfg=c.cfg, tree=c.task.repo, task_id=c.task.id,
-                       attempt=c.seq, required=c.d.required_review, defer=getattr(c, "high_risk", False))
+                       attempt=c.seq, required=c.d.required_review, defer=getattr(c, "high_risk", False),
+                       task_text=c.task.text)
     c.seq += 1
     c.n_review += rv.attempts
     for rr, guarded in rv.spend:

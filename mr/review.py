@@ -9,8 +9,11 @@ from mr import config, runners
 from mr.router import STRENGTH
 
 _PATCH_CAP = 60_000
-_NO_CHECKLIST = ("No checklist: judge whether the patch correctly and minimally "
-                 "does what the task asks; skip style.")
+TASK_ID = "TASK"  # the one item id of a plan-less review
+UNAVAILABLE = "unavailable"  # the reviewer crashed, timed out or broke the reply contract twice: no verdict
+_NO_CHECKLIST = (f'No checklist. Judge the patch against the TASK as one item with id "{TASK_ID}": does it '
+                 "correctly and minimally do what the task asks? Skip style.")
+_NO_TASK = "(no task text: judge whether the change is correct and breaks nothing)"
 _PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                             "prompts", "reviewer.v1.txt")
 
@@ -62,9 +65,25 @@ def parse_review(text: str) -> dict | None:
     return data
 
 
+def verdict(doc: dict | None, ids: list[str] | None) -> str | None:
+    """mr's verdict from a parsed MR_REVIEW; None when the reply breaks the contract (re-ask, like bad JSON).
+
+    With requirement ``ids`` the items cover each id exactly once, in any order; with none (plan-less) there
+    is at least one item. Any failed item fails; the reviewer's overall can only turn all-pass into unclear.
+    """
+    if doc is None:
+        return None
+    items = doc["items"]
+    if not items or (ids is not None and sorted(it["id"].strip() for it in items) != sorted(ids)):
+        return None
+    if any(it["verdict"] == "fail" for it in items):
+        return "fail"
+    return "unclear" if doc["overall"] == "unclear" else "pass"
+
+
 @dataclass(frozen=True)
 class SignalC:
-    verdict: str  # pass | fail | unclear
+    verdict: str  # pass | fail | unclear | unavailable
     ok: bool
     items: tuple
     reviewer: str
@@ -76,26 +95,28 @@ class SignalC:
 
 
 def _prompt(patch: str, requirements: list[dict] | None, item: str | None,
-            task_id: str) -> str:
+            task_id: str, task_text: str | None = None) -> str:
     with open(_PROMPT_PATH, encoding="utf-8") as fh:
         tmpl = fh.read()
     if len(patch) > _PATCH_CAP:
         patch = patch[:_PATCH_CAP] + f"\n[mr: patch truncated to {_PATCH_CAP} chars]"
     reqs = json.dumps(requirements, ensure_ascii=False) if requirements else _NO_CHECKLIST
-    return tmpl.format(item=item or "whole change", requirements=reqs,
+    return tmpl.format(item=item or "whole change", requirements=reqs, task=task_text or _NO_TASK,
                        patch=patch, task_id=task_id)
 
 
 def review(patch: str, requirements: list[dict] | None, item: str | None,
            author_model: str, risk: str, *, cfg, tree, task_id, attempt,
-           required: str | None = None, defer: bool = False) -> SignalC:
+           required: str | None = None, defer: bool = False, task_text: str | None = None) -> SignalC:
     """``required`` is the weakest Claude reviewer allowed. With ``defer`` a guard deny of that reviewer does
-    not fall back to review.claude_denied: the result is ``deferred``."""
+    not fall back to review.claude_denied: the result is ``deferred``. No valid reply after the re-ask is
+    ``unavailable`` and never ok, at any risk."""
     author = family(author_model)
     rung = reviewer_rung(author, risk, cfg, required)
-    prompt = _prompt(patch, requirements, item, task_id)
+    prompt = _prompt(patch, requirements, item, task_id, task_text)
+    ids = [r["id"] for r in requirements] if requirements else None
     timeout = cfg.timeouts.reviewer_s
-    doc, attempts, denied, deferred, warning = None, 0, False, False, None
+    doc, v, attempts, denied, deferred, warning = None, None, 0, False, False, None
     spend: list = []
     while attempts < 2:
         r = cfg.rungs[rung]
@@ -123,12 +144,14 @@ def review(patch: str, requirements: list[dict] | None, item: str | None,
                 continue
         attempts += 1
         doc = parse_review(res.result_text)
-        if doc is not None:
+        v = verdict(doc, ids)
+        if v is not None:
             break
-    verdict = doc["overall"] if doc else "unclear"
-    ok = verdict == "pass"
-    if verdict == "unclear" and risk == "low" and not deferred:
+    ok = v == "pass"
+    if v == "unclear" and risk == "low":
         ok, warning = True, "reviewer unclear; accepted at low risk"
-    return SignalC(verdict=verdict, ok=ok, items=tuple(doc["items"]) if doc else (),
+    if v is None and not deferred:
+        warning = warning or f"reviewer {rung} gave no valid MR_REVIEW in {attempts} attempts"
+    return SignalC(verdict=v or UNAVAILABLE, ok=ok, items=tuple(doc["items"]) if v else (),
                    reviewer=rung, attempts=attempts, warning=warning, denied=denied,
                    spend=tuple(spend), deferred=deferred)
