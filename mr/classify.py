@@ -88,6 +88,11 @@ def _status(mr_result: dict | None) -> str | None:
     return status if isinstance(status, str) else None
 
 
+def stopped(mr_result: dict | None) -> bool:
+    """The implementer said it did not finish. mr never accepts that attempt, whatever D, H, A and C say."""
+    return _status(mr_result) in ("blocked", "pushback")
+
+
 def is_complete(i: Inputs) -> bool:
     return i.mapped_files_touched and i.H and _status(i.mr_result) == "done"
 

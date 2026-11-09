@@ -181,7 +181,8 @@ class TestAdvisorKeepsUnavailable(AdvisorLoopCase):
         self.assertIn("reviewer unavailable", doc["reason"])
         self.assertNotIn("C reviewed", doc["reason"])
 
-    def test_advisor_block_pushback_and_reviewer_junk_twice_exit_75(self):
+    def test_advisor_block_pushback_replans_without_a_review(self):
+        """gate.self_report: a pushback is never a candidate, so C does not run and §6.3 sends it to a re-plan."""
         relay = "MR_ADVISOR " + json.dumps({"slot": "early", "verdict": "block", "risks": [
             {"what": "late event", "where": "mul.py:1", "severity": "high", "test": "x"}],
             "missing_test": None, "confidence": 0.9, "approach": "change", "relayed": "verbatim"})
@@ -189,9 +190,10 @@ class TestAdvisorKeepsUnavailable(AdvisorLoopCase):
             "item": None, "status": "pushback", "requirements": [], "deviations": [],
             "pushback": {"type": "advisor_block", "evidence": "advisor says no"}, "confidence": 0.5})
         code, doc, err = self.run_critical(pushback)
-        self.assertEqual(code, 75, err)
-        self.assertIn("reviewer unavailable", doc["reason"])
-        self.assertNotEqual(self.state_of(doc["task"])["rungs"][-1]["class"], "spec_suspect")
+        self.assertNotEqual(code, 0, err)
+        self.assertNotIn(GX, self.models(), "no reviewer call on a pushback attempt")
+        self.assertEqual(self.models()[:3], [GH, SONNET, GH], "plan, S+A pushback, one re-plan")
+        self.assertEqual(self.state_of(doc["task"])["rungs"][0]["class"], "spec_suspect")
 
 
 class ResumeCase(DeferCase):

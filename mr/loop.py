@@ -794,7 +794,8 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
         if sa:
             out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing]
                         + [f"locked: {p}" for p in sa.lock_violations])
-        green = not (infra or empty) and checkable and bool(sig["H"]) and sig["A"] is not False
+        green = (not (infra or empty) and checkable and bool(sig["H"]) and sig["A"] is not False
+                 and not classify.stopped(rr.mr_result))
     at = SimpleNamespace(code=code, kind=kind, handoff=handoff, attempt=attempt, started=started, rr=rr,
                          guarded=guarded, droid_try=droid_try, sig=sig, out=out, viol=viol, infra=infra,
                          dres=dres, hres=hres, sa=sa, aud=aud, green=green, patch=patch, row=None)
@@ -817,7 +818,7 @@ def _finish(c, at, sv, jv, ref) -> dict:
     if not at.viol:
         judged, dres, green = _scope_on(c), at.dres, at.green
         if sv is not None:
-            green = sv == "accept"
+            green = green and sv == "accept"
             out["J"] = [jv.reason, *jv.instructions] if jv else ["scope judge unavailable"]
         d_kept = (dres.status == "pass" or sv == "accept") if judged else bool(dres.ok)
         aud = at.aud
@@ -1066,7 +1067,8 @@ def _resume_rung(c, p: dict) -> dict:
         rr=SimpleNamespace(**rr), guarded=None, droid_try=None, sig=sig, out=out, viol=None, infra=False, dres=dres,
         hres=SimpleNamespace(ok=True, new_failures=tuple(out["H"])) if sig["H"] is not None else None,
         sa=SimpleNamespace(ok=True, failed=(), missing=(), lock_violations=()) if sig["A"] is not None else None,
-        aud=SimpleNamespace(**saved) if saved else None, green=True, patch=patch, row=p["row"])
+        aud=SimpleNamespace(**saved) if saved else None, green=not classify.stopped(rr["mr_result"]), patch=patch,
+        row=p["row"])
     if p["check"] == "review":
         return _finish(c, at, p["sv"], SimpleNamespace(**p["jv"]) if p["jv"] else None, p["ref"])
     sv, jv, ref = _scope_decision(c, code, dres, patch, sig)
