@@ -170,7 +170,8 @@ def base_failures(tree, cfg, repo_name, reset_tree) -> frozenset[str]:
         with open(path, encoding="utf-8") as fh:
             return frozenset(json.load(fh)["failures"])
     fails = run_checks(tree, _commands(cfg, repo_name), cfg.timeouts.hygiene_s)
-    _atomic_json(path, {"failures": sorted(fails)})
+    if not unparsed(cfg, repo_name, fails):  # a refused base is measured again on the next run
+        _atomic_json(path, {"failures": sorted(fails)})
     return fails
 
 
@@ -180,8 +181,10 @@ def unparsed(cfg, repo_name, base_set) -> list[str]:
             if any(f.startswith(f"cmd:{cmd}:") or f == f"vitest:{cmd}:unparsable" for f in base_set)]
 
 
-def refusal(commands: list[str]) -> str:
-    return "; ".join(f"hygiene command {cmd!r} already fails on the base tree and mr cannot tell its failures "
+def refusal(commands: list[str], base_set) -> str:
+    return "; ".join(f"hygiene command {cmd!r} timed out on the base tree; fix it or raise timeouts.hygiene_s"
+                     if f"cmd:{cmd}:timeout" in base_set else
+                     f"hygiene command {cmd!r} already fails on the base tree and mr cannot tell its failures "
                      "apart; fix it or use a reporter mr can parse" for cmd in commands)
 
 

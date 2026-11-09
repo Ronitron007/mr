@@ -1074,7 +1074,7 @@ def resume_task(c, p: dict) -> int:
 def refuse_unparsed(c, base_set) -> int | None:
     """Stop before any model call when a hygiene command is red on the base and mr parses no case from it."""
     if bad := hygiene.unparsed(c.cfg, os.path.basename(c.task.repo), base_set):
-        c.refused = {"check": "hygiene_base", "commands": bad, "reason": hygiene.refusal(bad)}
+        c.refused = {"check": "hygiene_base", "commands": bad, "reason": hygiene.refusal(bad, base_set)}
         return c.stop(exitcodes.UNSAFE_GIT, c.refused["reason"])
     return None
 

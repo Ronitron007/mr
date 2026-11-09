@@ -187,5 +187,56 @@ class TestResumeOldBase(ResumeCase):
         self.assertEqual(len(self.calls()), before, "no model call")
 
 
+class TestFlakyBase(LoopCase):
+    """Verify finding h.flaky_base_cached_refusal: one bad base run refuses that run only."""
+
+    def flaky(self, body):
+        flag = os.path.join(tempfile.mkdtemp(prefix="mr-flaky-"), "ran")
+        self.addCleanup(shutil.rmtree, os.path.dirname(flag), True)
+        self.hygiene_cmds = [f"sh -c 'if [ -f {flag} ]; then exit 0; fi; touch {flag}; {body}'"]
+        self.write_cfg()
+
+    def run_twice(self):
+        codes = []
+        for _ in range(2):
+            self.cursor({"files": {"README.md": "# test repo\nfixed typo\n"}}, model=GL)
+            code, doc, err = self.run_json("--type", "docs", "--difficulty", "trivial")
+            codes.append((code, err))
+        return codes
+
+    def test_timeout_once_then_pass_is_not_refused_again(self):
+        self.flaky("sleep 20")
+        (first, first_err), (second, second_err) = self.run_twice()
+        self.assertEqual(first, 4, first_err)
+        self.assertIn("timed out on the base tree", first_err)
+        self.assertEqual(second, 0, second_err)
+        self.assertEqual(self.models(), [GL])
+
+    def test_crash_once_then_pass_is_not_refused_again(self):
+        self.flaky("exit 137")
+        (first, first_err), (second, second_err) = self.run_twice()
+        self.assertEqual(first, 4, first_err)
+        self.assertIn("cannot tell its failures apart", first_err)
+        self.assertEqual(second, 0, second_err)
+        self.assertEqual(self.models(), [GL])
+
+
+class TestSwitchReporter(LoopCase):
+    """Verify finding h.cache_key_ignores_commands: a new hygiene command list misses the old base cache."""
+    repo_files = {**LoopCase.repo_files, "tests/test_known.py": KNOWN_RED}
+    hygiene_cmds = [DISCOVER + " >/dev/null 2>&1"]
+
+    def test_parsable_reporter_after_refusal_masks_the_known_red_test(self):
+        code, doc, err = self.run_json("--type", "docs", "--difficulty", "trivial")
+        self.assertEqual(code, 4, err)
+        self.hygiene_cmds = [DISCOVER]
+        self.write_cfg()
+        self.cursor({"files": {"README.md": "# test repo\nfixed typo\n"}}, model=GL)
+        code, doc, err = self.run_json("--type", "docs", "--difficulty", "trivial")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.state_of(doc["task"])["outcome"], "accepted")
+        self.assertIs(self.state_of(doc["task"])["rungs"][-1]["signals"]["H"], True)
+
+
 if __name__ == "__main__":
     unittest.main()
