@@ -288,5 +288,13 @@ class TestLockedTeardownOnBase(RunnerCase):
         self.assertFalse(os.path.exists(os.path.join(self.cfg.paths.home, 'tasks', 't-base', 'checklist.json')))
 
 
+class TestVitestFileStatus(RunnerCase):
+    def test_failed_file_status_with_rc0_fails_a(self):
+        report = vitest_report(self.repo, status='failed', message='Error: afterAll cleanup', success=False)
+        sig = self.vitest_signal(report, 0)
+        self.assertFalse(sig.ok, sig)
+        self.assertIn('afterAll cleanup', sig.detail)
+
+
 if __name__ == '__main__':
     unittest.main()

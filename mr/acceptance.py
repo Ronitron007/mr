@@ -40,7 +40,8 @@ class CollectionError:
 class NamedRun(dict):
     """``(file, test name) -> status``, plus how the test process ended: ``collection_errors``,
     ``returncode`` (None when no process ran), ``timed_out`` and ``problems``: ``(file or None, text)`` for a
-    runner summary that is missing or does not match the statuses."""
+    run error that the statuses do not show (a runner summary that is missing or does not match the statuses, a
+    vitest file that failed with no failed test)."""
 
     def __init__(self, statuses=None, collection_errors=(), returncode=None, timed_out=False, problems=()):
         super().__init__(statuses or {})
@@ -216,6 +217,7 @@ def parse_vitest_report(report: dict, *, tree: str) -> NamedRun:
     errors: list[CollectionError] = []
     counts = dict.fromkeys(_TOTALS, 0)
     failed_file = False
+    problems: list[tuple] = []
     for result in report.get("testResults") or []:
         if not isinstance(result, dict):
             continue
@@ -232,6 +234,10 @@ def parse_vitest_report(report: dict, *, tree: str) -> NamedRun:
                 counts["numFailedTests"] += status == "failed"
                 if item.get("title"):
                     statuses[(rel, str(item["title"]))] = status
+            if result.get("status") == "failed" and not any(
+                    isinstance(item, dict) and item.get("status") == "failed" for item in assertions):
+                why = str(result.get("message") or "").strip()[:500] or "no message"
+                problems.append((rel, f"{rel}: the test file failed with no failed test ({why})"))
             continue
         message = str(result.get("message") or "")
         found = _CANNOT_FIND.search(message)
@@ -242,7 +248,7 @@ def parse_vitest_report(report: dict, *, tree: str) -> NamedRun:
             ))
         elif message or result.get("status") not in (None, "passed"):
             errors.append(CollectionError(rel, "other", None, message.strip()[:500] or "collection failed"))
-    return NamedRun(statuses, errors, problems=_vitest_totals(report, counts, failed_file, statuses))
+    return NamedRun(statuses, errors, problems=problems + _vitest_totals(report, counts, failed_file, statuses))
 
 
 def _vitest_totals(report: dict, counts: dict, failed_file: bool, statuses: dict) -> list[tuple]:
