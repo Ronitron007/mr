@@ -5,6 +5,8 @@ import contextlib
 import json
 import os
 import re
+import shutil
+import signal
 import sys
 import time
 from dataclasses import asdict, dataclass, replace
@@ -541,7 +543,6 @@ def _plan_finish(c, res, row, stronger: bool = False) -> int | None:
     c.locked = tuple(t["path"] for t in res.checklist["tests"])
     with open(os.path.join(state.task_dir(cfg.paths.home, task.id), "tests.lock"), encoding="utf-8") as fh:
         c.lockdoc = json.load(fh)
-    c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
     c.prior = []  # the two-model rule counts only attempts after a (re-)plan
     return None
 
@@ -554,7 +555,6 @@ def _plan_less(c) -> None:
     c.plan_rejected = True
     c.checklist, c.locked, c.lockdoc = None, (), None
     c.d = replace(c.d, needs_review=True, required_review=router.at_least(c.d.required_review, "S+"))
-    c.base_set = hygiene.base_failures(c.task.repo, c.cfg, os.path.basename(c.task.repo), c.reset_tree)
     c.prior = []
 
 
@@ -947,7 +947,7 @@ def _context(c) -> dict:
         "adv_reruns": getattr(c, "adv_reruns", 0), "uncovered_reqs": list(getattr(c, "uncovered_reqs", ())),
         "plan_rejected": bool(getattr(c, "plan_rejected", False)),
         "plan_judge_reason": getattr(c, "plan_judge_reason", None), "high_risk": bool(c.high_risk),
-        "path_tags": sorted(c.path_tags), "base_set": sorted(c.base_set),
+        "path_tags": sorted(c.path_tags),
     }
 
 
@@ -1011,7 +1011,7 @@ def restore(c, st: dict) -> None:
     c.files, c.effort_up_used, c.prior = tuple(ctx["files"]), list(ctx["effort_up_used"]), list(ctx["prior"])
     c.adv_reruns, c.uncovered_reqs = ctx["adv_reruns"], tuple(ctx["uncovered_reqs"])
     c.plan_rejected, c.plan_judge_reason = ctx["plan_rejected"], ctx["plan_judge_reason"]
-    c.high_risk, c.path_tags, c.base_set = ctx["high_risk"], frozenset(ctx["path_tags"]), frozenset(ctx["base_set"])
+    c.high_risk, c.path_tags = ctx["high_risk"], frozenset(ctx["path_tags"])
     if c.checklist:
         c.locked = tuple(t["path"] for t in c.checklist["tests"])
         with open(os.path.join(state.task_dir(c.cfg.paths.home, c.task.id), "tests.lock"), encoding="utf-8") as fh:
@@ -1055,8 +1055,55 @@ def _resume_rung(c, p: dict) -> dict:
     return _finish(c, at, sv, jv, ref)
 
 
+def base_aside(home: str, task_id: str) -> str:
+    return os.path.join(state.task_dir(home, task_id), "base-aside")
+
+
+@contextlib.contextmanager
+def _signals_held():
+    """SIGINT and SIGTERM wait until the block ends, so a file move is never cut in half."""
+    held = signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT, signal.SIGTERM})
+    try:
+        yield
+    finally:
+        signal.pthread_sigmask(signal.SIG_SETMASK, held)
+
+
+def _move(paths, src: str, dst: str) -> None:
+    for rel in paths:
+        if os.path.lexists(os.path.join(src, rel)):
+            os.makedirs(os.path.dirname(os.path.join(dst, rel)), exist_ok=True)
+            shutil.move(os.path.join(src, rel), os.path.join(dst, rel))
+
+
+def _resume_base(c) -> int | None:
+    """Measure the base again on the pre-plan tree, never read it from state.json.
+
+    mr resume checked that the work tree is at the reset tree. After a plan that tree holds the planner's tests, and a
+    red one can turn an old test red there only, so they go aside (the planner may only create them) and come back.
+    A crash leaves them in base_aside, and mr resume then refuses because the tree is not at its reset tree.
+    """
+    repo, aside = c.task.repo, base_aside(c.cfg.paths.home, c.task.id)
+    try:
+        with _signals_held():
+            _move(c.locked, repo, aside)
+        c.base_set = hygiene.base_failures(repo, c.cfg, os.path.basename(repo))
+    finally:
+        with _signals_held():
+            _move(c.locked, aside, repo)
+            shutil.rmtree(aside, ignore_errors=True)
+    if c.lockdoc and (bad := acceptance.verify_lock(repo, c.lockdoc)):
+        return c.stop(exitcodes.UNSAFE_GIT, f"the locked tests changed while mr measured the hygiene base: "
+                                            f"{', '.join(bad)}")
+    return None
+
+
 def resume_task(c, p: dict) -> int:
     """Continue a deferred task where it stopped: the plan judge, or the scope judge on the saved attempt."""
+    if (code := _resume_base(c)) is not None:
+        return code
+    if (code := refuse_unparsed(c, c.base_set)) is not None:
+        return code
     if p["check"] == "plan":
         c.uncovered_reqs = ()
         if (code := _plan_finish(c, _plan_result(p), p["row"], p["stronger"])) is not None:
@@ -1065,6 +1112,14 @@ def resume_task(c, p: dict) -> int:
     if err := _apply_saved_patch(c):
         return c.stop(exitcodes.UNSAFE_GIT, err)
     return _ladder(c, p["rung"], p["kind"], p["handoff"], p)
+
+
+def refuse_unparsed(c, base_set) -> int | None:
+    """Stop before any model call when a hygiene command is red on the base and mr parses no case from it."""
+    if bad := hygiene.unparsed(c.cfg, os.path.basename(c.task.repo), base_set):
+        c.refused = {"check": "hygiene_base", "commands": bad, "reason": hygiene.refusal(bad, base_set)}
+        return c.stop(exitcodes.UNSAFE_GIT, c.refused["reason"])
+    return None
 
 
 def run_task(c) -> int:
@@ -1076,12 +1131,14 @@ def run_task(c) -> int:
     if not c.ladder:
         return c.stop(exitcodes.NOT_ACCEPTED, "empty ladder after the budget filter")
     c.reset_tree = patches.take_reset_tree(task.repo)
+    # the baseline is the tree before the planner writes its red tests, so they cannot hide a new failure
+    c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo))
+    if (code := refuse_unparsed(c, c.base_set)) is not None:
+        return code
     c.save_state("plan")
     if d.planner or (d.route == "cascade" and _DIFFS.index(d.difficulty) >= _DIFFS.index("medium")):
         if (code := _plan(c)) is not None:
             return code
-    else:
-        c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
     return _ladder(c, c.ladder[0], "implementer", "(first attempt)")
 
 
