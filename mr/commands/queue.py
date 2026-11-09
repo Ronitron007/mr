@@ -1,4 +1,4 @@
-"""`mr queue`: the tasks that wait for a check judge (mr resume <task> continues one)."""
+"""`mr queue`: the tasks that wait for a check judge or review C (mr resume <task> continues one)."""
 from __future__ import annotations
 
 import json
