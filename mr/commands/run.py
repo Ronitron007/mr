@@ -451,7 +451,7 @@ def _body(c: _Ctx) -> int:
 
     c.reset_tree = patches.take_reset_tree(repo)
     c.save_state("rung")
-    base_set = hygiene.base_failures(repo, cfg, os.path.basename(repo), c.reset_tree)
+    base_set = hygiene.base_failures(repo, cfg, os.path.basename(repo))
     if (code := loop.refuse_unparsed(c, base_set)) is not None:
         return code
 

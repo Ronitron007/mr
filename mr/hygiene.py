@@ -7,7 +7,6 @@ import os
 import re
 import signal
 import subprocess
-import tempfile
 from dataclasses import dataclass
 
 from mr import acceptance
@@ -18,7 +17,6 @@ from mr import acceptance
 _TSC = re.compile(r"^(?P<file>[^\s(]+)\(\d+,\d+\): error (?P<code>TS\d+)(?P<msg>.*)")
 _LINT = re.compile(r"^(?P<file>[\w./-]+):(\d+):(\d+)")
 _UNITTEST = re.compile(r"^(?P<outcome>FAIL|ERROR): (?P<name>\S+) \((?P<qual>[^)\s]+)\)(?P<sub>.*)$")
-ID_FORMAT = 2  # the failure id format; state.json and the base cache carry it
 _PYTEST = re.compile(r"^(?P<outcome>FAILED|ERROR) (?P<file>[^\s:(][^\s:]*)(?P<node>::\S+)?")
 
 
@@ -144,37 +142,14 @@ def run_checks(tree, commands: list[str], timeout_s) -> frozenset[str]:
     return frozenset(ids)
 
 
-def _atomic_json(path: str, obj) -> None:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    fd, tmp = tempfile.mkstemp(prefix=".tmp-", dir=os.path.dirname(path))
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as fh:
-            json.dump(obj, fh)
-            fh.flush()
-            os.fsync(fh.fileno())
-        os.replace(tmp, path)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-
-
 def _commands(cfg, repo_name) -> list[str]:
     found = (cfg.hygiene.get("commands") or {}).get(repo_name)
     return list(found) if found else []
 
 
-def base_failures(tree, cfg, repo_name, reset_tree) -> frozenset[str]:
-    commands = _commands(cfg, repo_name)
-    key = hashlib.sha1(json.dumps(commands).encode()).hexdigest()[:12]
-    path = os.path.join(cfg.paths.home, "state", f"hygiene-{repo_name}-{reset_tree}-{key}.v{ID_FORMAT}.json")
-    if os.path.isfile(path):
-        with open(path, encoding="utf-8") as fh:
-            return frozenset(json.load(fh)["failures"])
-    fails = run_checks(tree, commands, cfg.timeouts.hygiene_s)
-    if not unparsed(cfg, repo_name, fails):  # a refused base is measured again on the next run
-        _atomic_json(path, {"failures": sorted(fails)})
-    return fails
+def base_failures(tree, cfg, repo_name) -> frozenset[str]:
+    """Measured on every run, never cached: the tree sha cannot see untracked deps, toolchains or the timeout."""
+    return run_checks(tree, _commands(cfg, repo_name), cfg.timeouts.hygiene_s)
 
 
 def unparsed(cfg, repo_name, base_set) -> list[str]:

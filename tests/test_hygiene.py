@@ -1,6 +1,5 @@
 """Signal H: base-relative hygiene (spec §5.9, §10.3, AC-SIG-4)."""
 import hashlib
-import glob
 import json
 import os
 import re
@@ -61,7 +60,7 @@ class TestHygiene(unittest.TestCase):
                    "raise SystemExit(1)\n")
         self.write("fails.txt", "\n".join(lines) + "\n")
         cfg = _cfg(self.home, {"demo": ["python3 check.py"]})
-        base = hygiene.base_failures(self.tree, cfg, "demo", "abc123")
+        base = hygiene.base_failures(self.tree, cfg, "demo")
         self.assertEqual(base, frozenset(_lint_id(x) for x in lines))
         self.write("README.md", "rung touched a real file\n")
         same = hygiene.hygiene(self.tree, cfg, base, "demo")
@@ -145,23 +144,17 @@ class TestHygiene(unittest.TestCase):
         self.assertEqual(got, frozenset({
             "cmd:python3 -c 'import time; time.sleep(30)':timeout"}))
 
-    def test_base_cache_reused(self):
-        self.write("check.py",
-                   "from pathlib import Path\n"
-                   "p = Path('runs.count')\n"
-                   "n = int(p.read_text()) if p.exists() else 0\n"
-                   "p.write_text(str(n + 1))\n"
-                   "print('src/a.ts:1:1: boom')\n"
+    def test_base_measured_on_each_call(self):
+        self.write("check.py", "from pathlib import Path\n"
+                   "print(Path('fails.txt').read_text(), end='')\n"
                    "raise SystemExit(1)\n")
         cfg = _cfg(self.home, {"demo": ["python3 check.py"]})
-        first = hygiene.base_failures(self.tree, cfg, "demo", "deadbeef")
-        second = hygiene.base_failures(self.tree, cfg, "demo", "deadbeef")
-        self.assertEqual(first, second)
-        with open(os.path.join(self.tree, "runs.count"), encoding="utf-8") as fh:
-            self.assertEqual(fh.read(), "1")
-        [cache] = glob.glob(os.path.join(self.home, "state", "hygiene-demo-deadbeef-*.v2.json"))
-        with open(cache, encoding="utf-8") as fh:
-            self.assertEqual(json.load(fh)["failures"], sorted(first))
+        self.write("fails.txt", "src/a.ts:1:1: boom\n")
+        first = hygiene.base_failures(self.tree, cfg, "demo")
+        self.write("fails.txt", "src/b.ts:1:1: boom\n")
+        second = hygiene.base_failures(self.tree, cfg, "demo")
+        self.assertEqual(first, frozenset({_lint_id("src/a.ts:1:1: boom")}))
+        self.assertEqual(second, frozenset({_lint_id("src/b.ts:1:1: boom")}))
 
     def test_locked_ids_dropped(self):
         self.write("emit_tsc.py",

@@ -945,7 +945,7 @@ def _context(c) -> dict:
         "adv_reruns": getattr(c, "adv_reruns", 0), "uncovered_reqs": list(getattr(c, "uncovered_reqs", ())),
         "plan_rejected": bool(getattr(c, "plan_rejected", False)),
         "plan_judge_reason": getattr(c, "plan_judge_reason", None), "high_risk": bool(c.high_risk),
-        "path_tags": sorted(c.path_tags), "base_set": sorted(c.base_set), "base_set_format": hygiene.ID_FORMAT,
+        "path_tags": sorted(c.path_tags),
     }
 
 
@@ -1010,10 +1010,8 @@ def restore(c, st: dict) -> None:
     c.adv_reruns, c.uncovered_reqs = ctx["adv_reruns"], tuple(ctx["uncovered_reqs"])
     c.plan_rejected, c.plan_judge_reason = ctx["plan_rejected"], ctx["plan_judge_reason"]
     c.high_risk, c.path_tags = ctx["high_risk"], frozenset(ctx["path_tags"])
-    if ctx.get("base_set_format") == hygiene.ID_FORMAT:
-        c.base_set = frozenset(ctx["base_set"])
-    else:  # saved with older ids: measure again on the reset tree, which mr resume checked is the work tree
-        c.base_set = hygiene.base_failures(c.task.repo, c.cfg, os.path.basename(c.task.repo), c.reset_tree)
+    # measured again, never read from state.json: mr resume checked that the work tree is at the reset tree
+    c.base_set = hygiene.base_failures(c.task.repo, c.cfg, os.path.basename(c.task.repo))
     if c.checklist:
         c.locked = tuple(t["path"] for t in c.checklist["tests"])
         with open(os.path.join(state.task_dir(c.cfg.paths.home, c.task.id), "tests.lock"), encoding="utf-8") as fh:
@@ -1089,7 +1087,7 @@ def run_task(c) -> int:
         return c.stop(exitcodes.NOT_ACCEPTED, "empty ladder after the budget filter")
     c.reset_tree = patches.take_reset_tree(task.repo)
     # the baseline is the tree before the planner writes its red tests, so they cannot hide a new failure
-    c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
+    c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo))
     if (code := refuse_unparsed(c, c.base_set)) is not None:
         return code
     c.save_state("plan")

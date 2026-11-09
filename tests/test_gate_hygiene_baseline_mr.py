@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -82,7 +83,7 @@ class TestFailureIds(unittest.TestCase):
         self.write("tests/test_a.py", "import unittest\n\n\nclass A(unittest.TestCase):\n"
                    "    def test_known(self):\n        self.fail('old')\n")
         cfg = _cfg(os.path.join(self.tree, ".home"), {"demo": [sys.executable + " -m unittest discover -s tests"]})
-        base = hygiene.base_failures(self.tree, cfg, "demo", "pre-plan")
+        base = hygiene.base_failures(self.tree, cfg, "demo")
         self.assertEqual(len(base), 1, base)
         self.assertTrue(hygiene.hygiene(self.tree, cfg, base, "demo").ok)
         self.write("tests/test_b.py", "import unittest\n\n\nclass B(unittest.TestCase):\n"
@@ -100,14 +101,6 @@ class TestFailureIds(unittest.TestCase):
                    "FAILED (failures=1)\n")
         got = hygiene._parse(self.tree, "pytest -q", 1, summary, "")
         self.assertEqual(got, {"pytest:tests/test_a.py:FAILED ::A::test_known", "pytest:tests/test_c.py:ERROR "})
-
-    def test_new_command_list_misses_the_old_base_cache(self):
-        # verify finding h.cache_key_ignores_commands
-        home = os.path.join(self.tree, ".home")
-        old = hygiene.base_failures(self.tree, _cfg(home, {"demo": ["echo src/a.ts:1:1: old; exit 1"]}), "demo", "t")
-        new = hygiene.base_failures(self.tree, _cfg(home, {"demo": ["echo src/b.ts:1:1: new; exit 1"]}), "demo", "t")
-        self.assertEqual([f.split(":")[1] for f in old], ["src/a.ts"])
-        self.assertEqual([f.split(":")[1] for f in new], ["src/b.ts"])
 
     def test_repeated_diagnostic_is_new(self):
         line = "src/a.ts(3,1): error TS2322: Type 'string' is not assignable to type 'number'.\n"
@@ -159,7 +152,7 @@ class TestParsedRedBaseRuns(LoopCase):
 
 
 class TestResumeOldBase(ResumeCase):
-    """Review finding h.resume_old_base_ids: a state saved before the per-case ids measures its base again."""
+    """Review finding h.resume_old_base_ids: mr resume never uses the saved base ids, it measures them again."""
     repo_files = {**LoopCase.repo_files, "tests/test_known.py": KNOWN_RED}
     hygiene_cmds = [DISCOVER]
 
@@ -169,7 +162,6 @@ class TestResumeOldBase(ResumeCase):
         path = os.path.join(self.home, "tasks", doc["task"], "state.json")
         with open(path, encoding="utf-8") as fh:
             st = json.load(fh)
-        st["pending"]["ctx"].pop("base_set_format", None)
         st["pending"]["ctx"]["base_set"] = [f"cmd:{DISCOVER}:exit1"]  # what 8ead088 saved for this repo
         st.update(state_fields)
         with open(path, "w", encoding="utf-8") as fh:
@@ -186,12 +178,12 @@ class TestResumeOldBase(ResumeCase):
         self.assertIs(last["signals"]["H"], True, last)
         self.assertIn(GM, self.models())
 
-    def test_resume_of_an_old_state_off_its_reset_tree_exits_6(self):
+    def test_resume_off_its_reset_tree_exits_6(self):
         tid = self.defer_then_age(reset_point="4b825dc642cb6eb9a060e54bf8d69288fbee4904")
         before = len(self.calls())
         code, doc, text = self.resume(tid)
         self.assertEqual(code, 6, text)
-        self.assertIn("old id format", text)
+        self.assertIn("cannot measure the hygiene base again", text)
         self.assertEqual(len(self.calls()), before, "no model call")
 
 
@@ -230,7 +222,7 @@ class TestFlakyBase(LoopCase):
 
 
 class TestSwitchReporter(LoopCase):
-    """Verify finding h.cache_key_ignores_commands: a new hygiene command list misses the old base cache."""
+    """Verify finding h.cache_key_ignores_commands: a new hygiene command list gets its own base."""
     repo_files = {**LoopCase.repo_files, "tests/test_known.py": KNOWN_RED}
     hygiene_cmds = [DISCOVER + " >/dev/null 2>&1"]
 
@@ -244,6 +236,78 @@ class TestSwitchReporter(LoopCase):
         self.assertEqual(code, 0, err)
         self.assertEqual(self.state_of(doc["task"])["outcome"], "accepted")
         self.assertIs(self.state_of(doc["task"])["rungs"][-1]["signals"]["H"], True)
+
+
+README_FIX = {"README.md": "# test repo\nfixed typo\n"}
+DEP_LINT = "sh -c 'cat node_modules/lint.txt 2>/dev/null; test ! -s node_modules/lint.txt'"
+
+
+class TwoRuns(LoopCase):
+    def one(self):
+        self.cursor({"files": README_FIX}, model=GL)
+        return self.run_json("--type", "docs", "--difficulty", "trivial")
+
+    def discard(self):
+        subprocess.run(["git", "-C", self.repo, "reset", "-q", "--hard"], check=True)
+        subprocess.run(["git", "-C", self.repo, "clean", "-qfd"], check=True)
+
+    def dep_lint(self, text):
+        os.makedirs(os.path.join(self.repo, "node_modules"), exist_ok=True)
+        with open(os.path.join(self.repo, "node_modules", "lint.txt"), "w", encoding="utf-8") as fh:
+            fh.write(text)
+
+
+class TestTimeoutLowered(TwoRuns):
+    """Verify finding h.cache_key_ignores_timeout: a lowered hygiene_s on a known tree refuses, it burns no rung."""
+    hygiene_cmds = ["sh -c 'sleep 2; exit 0'"]
+
+    def test_lowered_timeout_on_a_green_tree_exits_4_with_no_model_call(self):
+        code, doc, err = self.one()
+        self.assertEqual(code, 0, err)
+        self.discard()
+        with open(self.cfgpath, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        raw["timeouts"] = {"hygiene_s": 100}  # x0.01 test time scale: 1 s, under the 2 s command
+        with open(self.cfgpath, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
+        before = len(self.calls())
+        code, doc, err = self.one()
+        self.assertEqual(code, 4, err)
+        self.assertIn("timed out on the base tree", err)
+        self.assertEqual(len(self.calls()), before, "no model call")
+
+
+class TestBaseMeasuredEachRun(TwoRuns):
+    """The tree sha cannot see untracked deps: each run measures its base again."""
+    hygiene_cmds = [DEP_LINT]
+
+    def test_untracked_change_between_runs_is_in_the_new_base(self):
+        code, doc, err = self.one()
+        self.assertEqual(code, 0, err)
+        self.discard()
+        self.dep_lint("src/dep.py:1:1: E1 broken dep\n")
+        code, doc, err = self.one()
+        self.assertEqual(code, 0, err)
+        self.assertIs(self.state_of(doc["task"])["rungs"][-1]["signals"]["H"], True)
+        self.assertEqual(self.models(), [GL, GL])
+
+
+class TestResumeMeasuresBase(ResumeCase):
+    """mr resume measures the base again on the reset tree; it does not trust the saved base."""
+    hygiene_cmds = [DEP_LINT]
+
+    def test_untracked_change_while_deferred_is_in_the_resumed_base(self):
+        code, doc, text = self.defer_scope(claude=[verdict("reject", "Plan again."), {"result": REVIEW_PASS}])
+        self.assertEqual(code, 75, text)
+        os.makedirs(os.path.join(self.repo, "node_modules"), exist_ok=True)
+        with open(os.path.join(self.repo, "node_modules", "lint.txt"), "w", encoding="utf-8") as fh:
+            fh.write("src/dep.py:1:1: E1 broken dep\n")
+        self.guard(ALLOW)
+        code, doc2, text = self.resume(doc["task"])
+        self.assertEqual(code, 0, text)
+        last = self.state_of(doc["task"])["rungs"][-1]
+        self.assertEqual(last["rung"], "G-m", last)
+        self.assertIs(last["signals"]["H"], True, last)
 
 
 if __name__ == "__main__":
