@@ -8,7 +8,9 @@ import unittest
 
 from mr import config, hygiene
 from mr.defaults import defaults
-from tests.test_loop_run import GL, LoopCase
+from tests.test_aj10_defer_mr import ALLOW, verdict
+from tests.test_aj10_resume_mr import ResumeCase
+from tests.test_loop_run import GL, GM, LoopCase
 
 OLD_TEST = ("import unittest\nimport calc\n\n\nclass Old(unittest.TestCase):\n"
             "    def test_old(self):\n        self.assertEqual(calc.old(), 1)\n")
@@ -146,6 +148,43 @@ class TestParsedRedBaseRuns(LoopCase):
         self.assertEqual(self.models(), [GL])
         self.assertIs(self.state_of(doc["task"])["rungs"][-1]["signals"]["H"], True)
         self.assertNotIn("refused", self.only_task())
+
+
+class TestResumeOldBase(ResumeCase):
+    """Review finding h.resume_old_base_ids: a state saved before the per-case ids measures its base again."""
+    repo_files = {**LoopCase.repo_files, "tests/test_known.py": KNOWN_RED}
+    hygiene_cmds = [DISCOVER]
+
+    def defer_then_age(self, **state_fields):
+        code, doc, text = self.defer_scope(claude=[verdict("reject", "Plan again."), {"result": REVIEW_PASS}])
+        self.assertEqual(code, 75, text)
+        path = os.path.join(self.home, "tasks", doc["task"], "state.json")
+        with open(path, encoding="utf-8") as fh:
+            st = json.load(fh)
+        st["pending"]["ctx"].pop("base_set_format", None)
+        st["pending"]["ctx"]["base_set"] = [f"cmd:{DISCOVER}:exit1"]  # what 8ead088 saved for this repo
+        st.update(state_fields)
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(st, fh)
+        self.guard(ALLOW)
+        return doc["task"]
+
+    def test_resume_of_an_old_state_does_not_flag_the_known_failure(self):
+        tid = self.defer_then_age()
+        code, doc, text = self.resume(tid)
+        self.assertEqual(code, 0, text)
+        last = self.state_of(tid)["rungs"][-1]
+        self.assertEqual(last["rung"], "G-m", last)
+        self.assertIs(last["signals"]["H"], True, last)
+        self.assertIn(GM, self.models())
+
+    def test_resume_of_an_old_state_off_its_reset_tree_exits_6(self):
+        tid = self.defer_then_age(reset_point="4b825dc642cb6eb9a060e54bf8d69288fbee4904")
+        before = len(self.calls())
+        code, doc, text = self.resume(tid)
+        self.assertEqual(code, 6, text)
+        self.assertIn("old id format", text)
+        self.assertEqual(len(self.calls()), before, "no model call")
 
 
 if __name__ == "__main__":

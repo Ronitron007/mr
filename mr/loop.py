@@ -945,7 +945,7 @@ def _context(c) -> dict:
         "adv_reruns": getattr(c, "adv_reruns", 0), "uncovered_reqs": list(getattr(c, "uncovered_reqs", ())),
         "plan_rejected": bool(getattr(c, "plan_rejected", False)),
         "plan_judge_reason": getattr(c, "plan_judge_reason", None), "high_risk": bool(c.high_risk),
-        "path_tags": sorted(c.path_tags), "base_set": sorted(c.base_set),
+        "path_tags": sorted(c.path_tags), "base_set": sorted(c.base_set), "base_set_format": hygiene.ID_FORMAT,
     }
 
 
@@ -1009,7 +1009,11 @@ def restore(c, st: dict) -> None:
     c.files, c.effort_up_used, c.prior = tuple(ctx["files"]), list(ctx["effort_up_used"]), list(ctx["prior"])
     c.adv_reruns, c.uncovered_reqs = ctx["adv_reruns"], tuple(ctx["uncovered_reqs"])
     c.plan_rejected, c.plan_judge_reason = ctx["plan_rejected"], ctx["plan_judge_reason"]
-    c.high_risk, c.path_tags, c.base_set = ctx["high_risk"], frozenset(ctx["path_tags"]), frozenset(ctx["base_set"])
+    c.high_risk, c.path_tags = ctx["high_risk"], frozenset(ctx["path_tags"])
+    if ctx.get("base_set_format") == hygiene.ID_FORMAT:
+        c.base_set = frozenset(ctx["base_set"])
+    else:  # saved with older ids: measure again on the reset tree, which mr resume checked is the work tree
+        c.base_set = hygiene.base_failures(c.task.repo, c.cfg, os.path.basename(c.task.repo), c.reset_tree)
     if c.checklist:
         c.locked = tuple(t["path"] for t in c.checklist["tests"])
         with open(os.path.join(state.task_dir(c.cfg.paths.home, c.task.id), "tests.lock"), encoding="utf-8") as fh:
@@ -1055,6 +1059,8 @@ def _resume_rung(c, p: dict) -> dict:
 
 def resume_task(c, p: dict) -> int:
     """Continue a deferred task where it stopped: the plan judge, or the scope judge on the saved attempt."""
+    if (code := refuse_unparsed(c, c.base_set)) is not None:
+        return code
     if p["check"] == "plan":
         c.uncovered_reqs = ()
         if (code := _plan_finish(c, _plan_result(p), p["row"], p["stronger"])) is not None:

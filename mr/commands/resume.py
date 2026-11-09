@@ -8,7 +8,7 @@ import argparse
 import sys
 import time
 
-from mr import config, exitcodes as ec, isolation, loop, patches, pipeline, state
+from mr import config, exitcodes as ec, hygiene, isolation, loop, patches, pipeline, state
 from mr.commands import run as run_cmd
 from mr.log import now_ist
 from mr.task import Params, Task
@@ -37,8 +37,12 @@ def _refusal(st: dict) -> str | None:
     head = pipeline.git(repo, "rev-parse", "HEAD").stdout.strip() or None
     if head != st.get("head"):
         return f"{task_id}: HEAD moved since it was deferred (saved {st.get('head')}, now {head}); nothing was changed"
-    if patches.take_reset_tree(repo) != st["pending"]["tree"]:
+    now = patches.take_reset_tree(repo)
+    if now != st["pending"]["tree"]:
         return f"{task_id}: the work tree changed since it was deferred; nothing was changed"
+    if st["pending"]["ctx"].get("base_set_format") != hygiene.ID_FORMAT and now != st.get("reset_point"):
+        return (f"{task_id}: its hygiene base uses an old id format and the work tree is not at its reset tree "
+                f"({st.get('reset_point')}), so mr cannot measure the base again; nothing was changed")
     return None
 
 

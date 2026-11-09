@@ -18,6 +18,7 @@ from mr import acceptance
 _TSC = re.compile(r"^(?P<file>[^\s(]+)\(\d+,\d+\): error (?P<code>TS\d+)(?P<msg>.*)")
 _LINT = re.compile(r"^(?P<file>[\w./-]+):(\d+):(\d+)")
 _UNITTEST = re.compile(r"^(?P<outcome>FAIL|ERROR): (?P<name>\S+) \((?P<qual>[^)\s]+)\)(?P<sub>.*)$")
+ID_FORMAT = 2  # the failure id format; state.json and the base cache carry it
 _PYTEST = re.compile(r"^(?P<outcome>FAILED|ERROR) (?P<file>[^\s:(][^\s:]*)(?P<node>::\S+)?")
 
 
@@ -164,7 +165,7 @@ def _commands(cfg, repo_name) -> list[str]:
 
 
 def base_failures(tree, cfg, repo_name, reset_tree) -> frozenset[str]:
-    path = os.path.join(cfg.paths.home, "state", f"hygiene-{repo_name}-{reset_tree}.v2.json")
+    path = os.path.join(cfg.paths.home, "state", f"hygiene-{repo_name}-{reset_tree}.v{ID_FORMAT}.json")
     if os.path.isfile(path):
         with open(path, encoding="utf-8") as fh:
             return frozenset(json.load(fh)["failures"])
