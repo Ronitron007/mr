@@ -248,5 +248,28 @@ class TestTransientTimeout(LoopCase):
         self.assertEqual(self.models(), [GH, GX, SONNET, OPUS, GX], 'no re-plan for a timeout')
 
 
+EMPTY_PLAN = {'goal': 'Fix the README typo.', 'scope': {'modify': ['README.md'], 'create': [], 'forbidden': []},
+              'requirements': [], 'acceptance': [], 'est_loc': 2, 'files_map': {}, 'tests': []}
+
+
+class TestEmptyPlanForDocs(LoopCase):
+    def test_docs_empty_plan_runs_plan_less_with_no_extra_calls(self):
+        self.set_scenario({'cursor': {GH: [{'result': json.dumps(EMPTY_PLAN)}], GM: [{'files': README}]},
+                           'claude': {SONNET: [{'result': REVIEW_PASS}]}})
+        code, out, err = self.mr('--type', 'docs', '--difficulty', 'medium')
+        self.assertEqual(code, 0, out + err)
+        st = self.state_of(json.loads(out)['task'])
+        self.assertEqual(st['outcome'], 'accepted', st)
+        self.assertFalse(st.get('checklist'))
+        self.assertEqual(self.models(), [GH, GM, SONNET], 'one planner call, the implementer, the review')
+        self.assertEqual(self.records('check_judge'), [])
+
+    def test_code_task_keeps_the_rule(self):
+        tmp = tempfile.mkdtemp(prefix='mr-gate-acc-')
+        self.addCleanup(shutil.rmtree, tmp, True)
+        errors = planner.validate(EMPTY_PLAN, repo_root=tmp, runner='unittest')
+        self.assertIn('keys: tests must be a non-empty list', errors)
+
+
 if __name__ == '__main__':
     unittest.main()

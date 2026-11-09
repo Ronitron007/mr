@@ -455,7 +455,8 @@ def _plan_call(c, rung, prior_errors=None):
     c.seq += 1
     started, t0 = now_ist(), time.time()
     res = planner.plan(task, cfg=cfg, tree=task.repo, task_id=task.id, attempt=c.seq,
-                       difficulty=c.d.difficulty, rung=rung, files=c.d.files, prior_errors=prior_errors)
+                       difficulty=c.d.difficulty, rung=rung, files=c.d.files, prior_errors=prior_errors,
+                       tests_optional=c.d.type in planner.NO_TEST_TYPES)
     c.n_plan += res.attempts
     for rr, guarded in res.spend:
         pipeline.add_cost(c.cost, rr, guarded)
@@ -518,8 +519,12 @@ def _plan(c) -> int | None:
 
 
 def _plan_finish(c, res, row, stronger: bool = False) -> int | None:
-    """The plan judge, the stronger re-plan and the checklist state after the first planner call."""
+    """The plan judge, the stronger re-plan and the checklist state after the first planner call. A plan with no
+    tests for a task type that has none (planner.NO_TEST_TYPES) runs plan-less at once: no judge, no re-plan."""
     cfg, task = c.cfg, c.task
+    if res.status == "no_tests":
+        c.log.append(row)
+        return _plan_less(c, f"{planner.NO_TESTS} for a {c.d.type} task; running without a plan")
     if (getattr(cfg, "plan", None) or {}).get("judge", "on") == "on":
         res = _recover(c, res, row, stronger)
         if c.pending:
@@ -547,9 +552,9 @@ def _plan_finish(c, res, row, stronger: bool = False) -> int | None:
     return None
 
 
-def _plan_less(c) -> None:
+def _plan_less(c, note: str = PLAN_REJECTED) -> None:
     """No usable plan: no checklist, the no-checklist D limits, and a required review of at least S+."""
-    print(PLAN_REJECTED, file=sys.stderr)
+    print(note, file=sys.stderr)
     if getattr(c, "plan_judge_reason", None):
         print(f"plan judge: {c.plan_judge_reason}", file=sys.stderr)
     c.plan_rejected = True

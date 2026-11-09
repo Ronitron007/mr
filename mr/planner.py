@@ -40,12 +40,14 @@ class PlanResult(NamedTuple):
     notes: tuple = ()  # why an attempt left the configured rung (Claude denied)
     repairs: list = []  # auto_repair entries of the attempt that decided the result
     retry_errors: list = []  # the errors the second attempt was given
-    status: str = "rejected"  # valid | repaired | let_through | rejected
+    status: str = "rejected"  # valid | repaired | let_through | rejected | no_tests
     infra: bool = False  # both attempts timed out or gave no JSON document
     doc: dict | None = None  # the last parsed and auto-repaired document, valid or not
 
 
 _NO_DOC = "planner output is not one JSON document"
+NO_TEST_TYPES = frozenset({"docs", "explain", "plan", "review"})  # task types with no behavioural tests
+NO_TESTS = "plan has no requirements, acceptance items or tests"
 RESOLVER_LINE = "These files come from mr's resolver and the judge; add any file the change needs."
 
 
@@ -733,10 +735,13 @@ def _run(code: str, prompt: str, tree: str, *, cfg, task_id: str, attempt: int):
 
 
 def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | None = None,
-         rung: str | None = None, files: dict | None = None, prior_errors: list[str] | None = None) -> PlanResult:
+         rung: str | None = None, files: dict | None = None, prior_errors: list[str] | None = None,
+         tests_optional: bool = False) -> PlanResult:
     """Run the planner rung for the task's difficulty, or ``rung`` when given. Each attempt is parse, auto_repair,
     validate, tests on base; an invalid attempt is retried once with its errors, then ok=False. ``files`` is the
-    decision files dict (None means the task's hint files); ``prior_errors`` go into the first prompt."""
+    decision files dict (None means the task's hint files); ``prior_errors`` go into the first prompt. With
+    ``tests_optional`` (a task type in NO_TEST_TYPES) a document with empty requirements, acceptance and tests
+    ends the call at once: ok=False, status no_tests, no retry."""
     repo_name = os.path.basename(os.path.abspath(tree).rstrip(os.sep))
     runner = acceptance.runner_for(cfg, repo_name)
     primary = rung or cfg.planner.rungs[difficulty or getattr(task, "difficulty", None) or "medium"]
@@ -785,6 +790,9 @@ def plan(task, *, cfg, tree: str, task_id: str, attempt: int, difficulty: str | 
         no_doc.append(False)
         doc, repairs = auto_repair(doc, repo_root=tree, runner=runner)
         last_doc = doc
+        if tests_optional and all(doc.get(key) == [] for key in ("requirements", "acceptance", "tests")):
+            return PlanResult(False, None, None, [NO_TESTS], n, raws, used, tuple(spend), tuple(notes),
+                              repairs, retry_errors, "no_tests", False, doc)
         errors = _settle(doc, cfg=cfg, tree=tree, task_id=task_id, runner=runner, repo_name=repo_name)
         if errors:
             continue
