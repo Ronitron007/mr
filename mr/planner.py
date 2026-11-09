@@ -268,9 +268,9 @@ def validate(doc, *, repo_root: str, runner: str) -> list[str]:
 
     requirements = doc.get("requirements")
     req_ids: list[str] = []
-    if not isinstance(requirements, list):
-        errors.append("keys: requirements must be a list")
-        requirements = []
+    if not isinstance(requirements, list) or not requirements:
+        errors.append("keys: requirements must be a non-empty list")
+        requirements = requirements if isinstance(requirements, list) else []
     for index, req in enumerate(requirements, start=1):
         if not _exact(req, _REQ_KEYS, "requirements", errors):
             continue
@@ -289,9 +289,9 @@ def validate(doc, *, repo_root: str, runner: str) -> list[str]:
             _exact(example, _EX_KEYS, "examples", errors)
 
     acceptance_items = doc.get("acceptance")
-    if not isinstance(acceptance_items, list):
-        errors.append("keys: acceptance must be a list")
-        acceptance_items = []
+    if not isinstance(acceptance_items, list) or not acceptance_items:
+        errors.append("keys: acceptance must be a non-empty list")
+        acceptance_items = acceptance_items if isinstance(acceptance_items, list) else []
     covered: set[str] = set()
     acc_ids_ok = True
     for index, item in enumerate(acceptance_items, start=1):
@@ -307,15 +307,15 @@ def validate(doc, *, repo_root: str, runner: str) -> list[str]:
         else:
             covered.update(covers)
         names = item.get("tests")
-        if not isinstance(names, list) or not all(isinstance(name, str) for name in names):
-            errors.append("keys: acceptance.tests must be a list of strings")
+        if not isinstance(names, list) or not names or not all(isinstance(name, str) for name in names):
+            errors.append("keys: acceptance.tests must be a non-empty list of strings")
 
     tests = doc.get("tests")
     contents: dict[str, str] = {}
     test_paths: set[str] = set()
-    if not isinstance(tests, list):
-        errors.append("keys: tests must be a list")
-        tests = []
+    if not isinstance(tests, list) or not tests:
+        errors.append("keys: tests must be a non-empty list")
+        tests = tests if isinstance(tests, list) else []
     for item in tests:
         if not _exact(item, _TEST_KEYS, "tests", errors):
             continue

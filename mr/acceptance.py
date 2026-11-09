@@ -34,11 +34,14 @@ class CollectionError:
 
 
 class NamedRun(dict):
-    """``(file, test name) -> status``, plus ``collection_errors``."""
+    """``(file, test name) -> status``, plus how the test process ended: ``collection_errors``,
+    ``returncode`` (None when no process ran) and ``timed_out``."""
 
-    def __init__(self, statuses=None, collection_errors=()):
+    def __init__(self, statuses=None, collection_errors=(), returncode=None, timed_out=False):
         super().__init__(statuses or {})
         self.collection_errors = tuple(collection_errors)
+        self.returncode = returncode
+        self.timed_out = timed_out
 
 
 @dataclass(frozen=True)
@@ -49,6 +52,7 @@ class SignalA:
     missing: tuple
     lock_violations: tuple
     detail: str
+    run_errors: tuple = ()
 
 
 def runner_for(cfg, repo_name: str) -> str:
@@ -371,7 +375,7 @@ def run_named(tree: str, files: list[str], runner: str, timeout) -> NamedRun:
         handle.close()
         try:
             argv = ["npx", "vitest", "run", *files, "--reporter=json", f"--outputFile={out_path}"]
-            _rc, text, timed = _run_argv(argv, tree, timeout)
+            rc, text, timed = _run_argv(argv, tree, timeout)
             if os.path.isfile(out_path) and os.path.getsize(out_path):
                 try:
                     with open(out_path, encoding="utf-8") as handle:
@@ -380,11 +384,11 @@ def run_named(tree: str, files: list[str], runner: str, timeout) -> NamedRun:
                     report = None
                 if isinstance(report, dict):
                     run = parse_vitest_report(report, tree=tree)
-                    if timed:
-                        run.collection_errors = (*run.collection_errors, CollectionError(None, "other", None, "timeout"))
-                    return run
-            detail = "timeout" if timed else (text.strip()[:500] or "vitest produced no JSON report")
-            return NamedRun({}, [CollectionError(files[0] if files else None, "other", None, detail)])
+                    return NamedRun(run, run.collection_errors, rc, timed)
+            if timed:
+                return NamedRun({}, (), rc, True)
+            detail = text.strip()[:500] or "vitest produced no JSON report"
+            return NamedRun({}, [CollectionError(files[0] if files else None, "other", None, detail)], rc)
         finally:
             try:
                 os.remove(out_path)
@@ -395,13 +399,11 @@ def run_named(tree: str, files: list[str], runner: str, timeout) -> NamedRun:
     modules = [_dotted(path) for path in files]
     child_env = os.environ.copy()
     child_env["PYTHONWARNINGS"] = "ignore"
-    _rc, text, timed = _run_argv(
+    rc, text, timed = _run_argv(
         [sys.executable, "-m", "unittest", "-v", *modules], tree, timeout, env=child_env,
     )
     run = _parse_unittest(text, files)
-    if timed:
-        run.collection_errors = (*run.collection_errors, CollectionError(None, "other", None, "timeout"))
-    return run
+    return NamedRun(run, run.collection_errors, rc, timed)
 
 
 def _create_paths(checklist: dict) -> list[str]:
@@ -420,7 +422,7 @@ def _acceptable(err: CollectionError, create: list[str], test_file: str | None) 
 def base_errors(checklist: dict, run: NamedRun) -> list[str]:
     """Empty when every named test is red on the current tree (AC-A-2)."""
     create = _create_paths(checklist)
-    errors: list[str] = []
+    errors: list[str] = ["collection error: timeout"] if getattr(run, "timed_out", False) else []
     red_files: set[str] = set()
     for err in getattr(run, "collection_errors", ()):
         if _acceptable(err, create, err.file):
@@ -445,7 +447,26 @@ def base_errors(checklist: dict, run: NamedRun) -> list[str]:
     return errors
 
 
+def run_errors(checklist: dict, run) -> tuple[str, ...]:
+    """Why a final run of the locked tests is not healthy apart from its named tests: a timeout, a collection
+    error, a failed test that is not named (a teardown error) in a locked file, or a nonzero exit that no
+    failed status explains. Empty when the run is healthy."""
+    named = {(item.get("file"), name) for item in checklist.get("acceptance") or [] if isinstance(item, dict)
+             for name in item.get("tests") or []}
+    locked = set(_acceptance_paths(checklist))
+    errors = ["timeout"] if getattr(run, "timed_out", False) else []
+    errors += [f"collection error: {err.detail}" for err in getattr(run, "collection_errors", ())]
+    errors += [f"{rel}::{name}" for (rel, name), status in run.items()
+               if status == "failed" and rel in locked and (rel, name) not in named]
+    returncode = getattr(run, "returncode", None)
+    if returncode and not errors and "failed" not in run.values():
+        errors.append(f"test process exited {returncode}")
+    return tuple(errors)
+
+
 def signal_from_statuses(checklist: dict, statuses, lock_violations=()) -> SignalA:
+    """Signal A from a run. It passes only when at least one named test ran, every named test passed and the
+    run is healthy (``run_errors``)."""
     violations = tuple(lock_violations)
     passed, failed, missing = [], [], []
     if not violations:
@@ -462,14 +483,17 @@ def signal_from_statuses(checklist: dict, statuses, lock_violations=()) -> Signa
                     missing.append(pair)
                 else:
                     failed.append(pair)
+    bad_run = () if violations else run_errors(checklist, statuses if statuses is not None else {})
     if violations:
         detail = "locked files changed: " + ", ".join(violations)
-    elif failed or missing:
-        detail = f"{len(failed)} failed, {len(missing)} missing"
+    elif not (passed or failed or missing):
+        detail = "no named acceptance tests"
     else:
-        detail = f"{len(passed)} passed"
-    ok = not violations and not failed and not missing
-    return SignalA(ok, tuple(passed), tuple(failed), tuple(missing), violations, detail)
+        detail = f"{len(failed)} failed, {len(missing)} missing" if failed or missing else f"{len(passed)} passed"
+        if bad_run:
+            detail += "; unhealthy run: " + ", ".join(bad_run)
+    ok = not violations and bool(passed) and not failed and not missing and not bad_run
+    return SignalA(ok, tuple(passed), tuple(failed), tuple(missing), violations, detail, bad_run)
 
 
 def acceptance(tree: str, checklist: dict, lockdoc: dict, *, cfg, repo_name: str) -> SignalA:
