@@ -8,7 +8,7 @@ import unittest
 
 from mr import config, hygiene
 from mr.defaults import defaults
-from tests.test_loop_run import LoopCase
+from tests.test_loop_run import GL, LoopCase
 
 OLD_TEST = ("import unittest\nimport calc\n\n\nclass Old(unittest.TestCase):\n"
             "    def test_old(self):\n        self.assertEqual(calc.old(), 1)\n")
@@ -104,6 +104,48 @@ class TestFailureIds(unittest.TestCase):
         base = hygiene._parse(self.tree, "npx tsc --noEmit", 2, line, "")
         twice = hygiene._parse(self.tree, "npx tsc --noEmit", 2, line + line.replace("(3,", "(9,"), "")
         self.assertEqual(len(twice - base), 1, (base, twice))
+
+
+NODE_RED = "const t=require('node:test');const a=require('assert');t('known red',()=>a.equal(1,2));\n"
+NODE_OLD = ("const t=require('node:test');const a=require('assert');const c=require('./calc');"
+            "t('old green',()=>a.equal(c.old(),1));\n")
+KNOWN_RED = "import unittest\n\n\nclass K(unittest.TestCase):\n    def test_k(self):\n        self.fail('known red')\n"
+DISCOVER = sys.executable + " -m unittest discover -s tests"
+
+
+@unittest.skipUnless(shutil.which("node"), "needs node")
+class TestUnparsedRedBaseRefused(LoopCase):
+    """Review finding h.unparsed_fallback_masks: a red base that mr cannot split into cases stops the run."""
+    repo_files = {"a.test.js": NODE_RED, "b.test.js": NODE_OLD, "calc.js": "exports.old=()=>1;\n",
+                  ".gitignore": "node_modules/\n"}
+    hygiene_cmds = ["node --test"]
+
+    def test_red_unparsed_base_exits_4_before_any_model_call(self):
+        self.cursor({"files": {"calc.js": "exports.old=()=>9999;\nexports.neu=()=>2;\n"}}, model=GL)
+        code, doc, err = self.run_json("--type", "code", "--difficulty", "trivial", text="add neu() to calc.js")
+        self.assertEqual(code, 4, err)
+        self.assertEqual(self.calls(), [], "no model call")
+        lines = [ln for ln in err.splitlines() if "node --test" in ln]
+        self.assertEqual(len(lines), 1, err)
+        self.assertIn("already fails on the base tree", lines[0])
+        task = self.only_task()
+        self.assertEqual(task["refused"]["commands"], ["node --test"], task)
+        self.assertIn("node --test", task["refused"]["reason"])
+        self.assert_schema()
+
+
+class TestParsedRedBaseRuns(LoopCase):
+    repo_files = {"calc.py": "def old():\n    return 1\n", "tests/test_known.py": KNOWN_RED,
+                  ".gitignore": "__pycache__/\n"}
+    hygiene_cmds = [DISCOVER]
+
+    def test_red_base_with_case_ids_still_runs(self):
+        self.cursor({"files": {"calc.py": "def old():\n    return 1\ndef neu():\n    return 2\n"}}, model=GL)
+        code, doc, err = self.run_json("--type", "code", "--difficulty", "trivial", text="add neu() to calc.py")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(self.models(), [GL])
+        self.assertIs(self.state_of(doc["task"])["rungs"][-1]["signals"]["H"], True)
+        self.assertNotIn("refused", self.only_task())
 
 
 if __name__ == "__main__":

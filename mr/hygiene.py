@@ -173,6 +173,17 @@ def base_failures(tree, cfg, repo_name, reset_tree) -> frozenset[str]:
     return fails
 
 
+def unparsed(cfg, repo_name, base_set) -> list[str]:
+    """The hygiene commands that fail on the base tree with no case id, so a base failure cannot mask one case."""
+    return [cmd for cmd in _commands(cfg, repo_name)
+            if any(f.startswith(f"cmd:{cmd}:") or f == f"vitest:{cmd}:unparsable" for f in base_set)]
+
+
+def refusal(commands: list[str]) -> str:
+    return "; ".join(f"hygiene command {cmd!r} already fails on the base tree and mr cannot tell its failures "
+                     "apart; fix it or use a reporter mr can parse" for cmd in commands)
+
+
 def hygiene(tree, cfg, base_set, repo_name, locked_ids: frozenset[str] = frozenset()) -> SignalH:
     base, commands = frozenset(f for f in base_set if not _locked(f, locked_ids)), _commands(cfg, repo_name)
     if not commands:

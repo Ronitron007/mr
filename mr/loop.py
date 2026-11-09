@@ -1065,6 +1065,14 @@ def resume_task(c, p: dict) -> int:
     return _ladder(c, p["rung"], p["kind"], p["handoff"], p)
 
 
+def refuse_unparsed(c, base_set) -> int | None:
+    """Stop before any model call when a hygiene command is red on the base and mr parses no case from it."""
+    if bad := hygiene.unparsed(c.cfg, os.path.basename(c.task.repo), base_set):
+        c.refused = {"check": "hygiene_base", "commands": bad, "reason": hygiene.refusal(bad)}
+        return c.stop(exitcodes.UNSAFE_GIT, c.refused["reason"])
+    return None
+
+
 def run_task(c) -> int:
     """The full ladder: planner (medium+), rungs, signals, escalation, accept or exit (§10.2)."""
     cfg, task = c.cfg, c.task
@@ -1076,6 +1084,8 @@ def run_task(c) -> int:
     c.reset_tree = patches.take_reset_tree(task.repo)
     # the baseline is the tree before the planner writes its red tests, so they cannot hide a new failure
     c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo), c.reset_tree)
+    if (code := refuse_unparsed(c, c.base_set)) is not None:
+        return code
     c.save_state("plan")
     if d.planner or (d.route == "cascade" and _DIFFS.index(d.difficulty) >= _DIFFS.index("medium")):
         if (code := _plan(c)) is not None:
