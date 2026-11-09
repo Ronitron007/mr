@@ -216,5 +216,37 @@ class TestRunnerSummary(RunnerCase):
         self.assertIn('same file and title', sig.detail)
 
 
+def slow_teardown(counter, slow_runs):
+    return ('import mul, os, time\nimport unittest\n\n\nclass TestMul(unittest.TestCase):\n'
+            '    def test_mul_basic(self):\n        self.assertEqual(mul.mul(2, 3), 6)\n\n\n'
+            'def tearDownModule():\n'
+            f'    p = {counter!r}\n'
+            '    n = int(open(p).read()) if os.path.exists(p) else 0\n'
+            '    open(p, "w").write(str(n + 1))\n'
+            f'    if n < {slow_runs}:\n        time.sleep(6)\n')
+
+
+class TestTransientTimeout(LoopCase):
+    def test_timeouts_on_two_models_are_not_spec_suspect(self):
+        with open(self.cfgpath, encoding='utf-8') as fh:
+            raw = json.load(fh)
+        raw['timeouts'] = {'acceptance_s': 3}
+        with open(self.cfgpath, 'w', encoding='utf-8') as fh:
+            json.dump(raw, fh)
+        doc = copy.deepcopy(PLAN)
+        doc['tests'][0]['content'] = slow_teardown(os.path.join(self.home, 'teardowns'), 2)
+        correct = mul('*')
+        self.set_scenario({'cursor': {GH: [{'result': json.dumps(doc)}], GX: [correct, {'result': REVIEW_PASS}]},
+                           'claude': {SONNET: [mul('*', '  # s')], OPUS: [mul('*', '  # o')]}})
+        code, out, err = self.mr(*MEDIUM)
+        self.assertEqual(code, 0, out + err)
+        st = self.state_of(json.loads(out)['task'])
+        self.assertEqual([(r['rung'], r['class']) for r in st['rungs']],
+                         [('G-x', 'tried_wrong'), ('S', 'tried_wrong'), ('O', None)])
+        self.assertEqual(st['rungs'][1]['failing'], ['timeout'])
+        self.assertIn('timeout', self.prompts(SONNET)[0], 'the handoff names the timeout')
+        self.assertEqual(self.models(), [GH, GX, SONNET, OPUS, GX], 'no re-plan for a timeout')
+
+
 if __name__ == '__main__':
     unittest.main()

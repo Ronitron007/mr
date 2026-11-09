@@ -792,7 +792,7 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
         out["D"], out["D_warn"] = list(dres.reasons), list(dres.warnings)
         out["H"] = list(hres.new_failures) if hres else []
         if sa:
-            out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing] + list(sa.run_errors)
+            out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing + sa.other_failed] + list(sa.run_errors)
                         + [f"locked: {p}" for p in sa.lock_violations])
         green = not (infra or empty) and checkable and bool(sig["H"]) and sig["A"] is not False
     at = SimpleNamespace(code=code, kind=kind, handoff=handoff, attempt=attempt, started=started, rr=rr,
@@ -886,12 +886,13 @@ def _classify(c, rung, rr, dres, hres, sa, rv, infra: bool, judged: bool = False
     groups = (list(c.checklist["files_map"].values()) if c.checklist
               else [named] if named else [])
     touched = all(any(f in dres.files for f in g) for g in groups) if groups else bool(dres.files)
-    failing = tuple(f"{f}::{t}" for f, t in sa.failed + sa.missing) + tuple(sa.run_errors) if sa else ()
+    failing = tuple(f"{f}::{t}" for f, t in sa.failed + sa.missing + sa.other_failed) if sa else ()
     h_ok = hres.ok if hres else True
     inputs = classify.Inputs(
         model=rung.model, rc=rr.rc, is_error=bool(rr.is_error), timed_out=rr.timed_out,
         wrapper_exit_75=False, hook_block=False, has_envelope=rr.has_envelope, diff_files=dres.files,
         diff_loc=dres.loc, mapped_files_touched=touched, H=h_ok, D=dres.ok, A_failing=failing,
+        A_run_errors=tuple(sa.run_errors) if sa else (),
         C=rv.verdict if rv else None, mr_result=rr.mr_result, prior_attempts=tuple(c.prior),
         D_status=dres.status if judged else None, scope_verdict=sv)
     rules = classify.classify(inputs)
@@ -1047,7 +1048,8 @@ def _resume_rung(c, p: dict) -> dict:
         code=code, kind=p["kind"], handoff=p["handoff"], attempt=p["attempt"], started=p["row"]["started_at"],
         rr=SimpleNamespace(**rr), guarded=None, droid_try=None, sig=sig, out=out, viol=None, infra=False, dres=dres,
         hres=SimpleNamespace(ok=True, new_failures=tuple(out["H"])) if sig["H"] is not None else None,
-        sa=SimpleNamespace(ok=True, failed=(), missing=(), lock_violations=(), run_errors=()) if sig["A"] is not None else None,
+        sa=SimpleNamespace(ok=True, failed=(), missing=(), lock_violations=(), run_errors=(),
+                           other_failed=()) if sig["A"] is not None else None,
         aud=SimpleNamespace(**saved) if saved else None, green=True, patch=patch, row=p["row"])
     sv, jv, ref = _scope_decision(c, code, dres, patch, sig)
     if sv == "deferred":

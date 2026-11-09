@@ -58,7 +58,8 @@ class SignalA:
     missing: tuple
     lock_violations: tuple
     detail: str
-    run_errors: tuple = ()
+    run_errors: tuple = ()  # why the run is unhealthy, as text: never a test id
+    other_failed: tuple = ()  # (file, test) pairs: failed tests in a locked file that the checklist does not name
 
 
 def runner_for(cfg, repo_name: str) -> str:
@@ -499,19 +500,23 @@ def base_errors(checklist: dict, run: NamedRun) -> list[str]:
     return errors
 
 
-def run_errors(checklist: dict, run) -> tuple[str, ...]:
-    """Why a final run of the locked tests is not healthy apart from its named tests: a timeout, a collection
-    error, a runner summary that is missing or does not match (``NamedRun.problems``), a failed test that is not
-    named (a teardown error) in a locked file, or a nonzero exit that no failed status explains. Empty when the
-    run is healthy."""
+def _other_failed(checklist: dict, run) -> tuple:
+    """Failed tests in a locked file that the checklist does not name, such as a ``tearDownModule`` error."""
     named = {(item.get("file"), name) for item in checklist.get("acceptance") or [] if isinstance(item, dict)
              for name in item.get("tests") or []}
+    locked = set(_acceptance_paths(checklist))
+    return tuple((rel, name) for (rel, name), status in run.items()
+                 if status == "failed" and rel in locked and (rel, name) not in named)
+
+
+def run_errors(checklist: dict, run) -> tuple[str, ...]:
+    """Why a final run of the locked tests is not healthy apart from its test statuses: a timeout, a collection
+    error, a runner summary that is missing or does not match (``NamedRun.problems``), or a nonzero exit that no
+    failed status explains. Empty when the run is healthy. A failed test that is not named is ``_other_failed``."""
     locked = set(_acceptance_paths(checklist))
     errors = ["timeout"] if getattr(run, "timed_out", False) else []
     errors += [f"collection error: {err.detail}" for err in getattr(run, "collection_errors", ())]
     errors += [text for file, text in getattr(run, "problems", ()) if file is None or file in locked]
-    errors += [f"{rel}::{name}" for (rel, name), status in run.items()
-               if status == "failed" and rel in locked and (rel, name) not in named]
     returncode = getattr(run, "returncode", None)
     if returncode and not errors and "failed" not in run.values():
         errors.append(f"test process exited {returncode}")
@@ -537,17 +542,19 @@ def signal_from_statuses(checklist: dict, statuses, lock_violations=()) -> Signa
                     missing.append(pair)
                 else:
                     failed.append(pair)
-    bad_run = () if violations else run_errors(checklist, statuses if statuses is not None else {})
+    run = statuses if statuses is not None else {}
+    other = () if violations else _other_failed(checklist, run)
+    bad_run = () if violations else run_errors(checklist, run)
     if violations:
         detail = "locked files changed: " + ", ".join(violations)
     elif not (passed or failed or missing):
         detail = "no named acceptance tests"
     else:
         detail = f"{len(failed)} failed, {len(missing)} missing" if failed or missing else f"{len(passed)} passed"
-        if bad_run:
-            detail += "; unhealthy run: " + ", ".join(bad_run)
-    ok = not violations and bool(passed) and not failed and not missing and not bad_run
-    return SignalA(ok, tuple(passed), tuple(failed), tuple(missing), violations, detail, bad_run)
+        if other or bad_run:
+            detail += "; unhealthy run: " + ", ".join([f"{f}::{t}" for f, t in other] + list(bad_run))
+    ok = not violations and bool(passed) and not failed and not missing and not other and not bad_run
+    return SignalA(ok, tuple(passed), tuple(failed), tuple(missing), violations, detail, bad_run, other)
 
 
 def acceptance(tree: str, checklist: dict, lockdoc: dict, *, cfg, repo_name: str) -> SignalA:
