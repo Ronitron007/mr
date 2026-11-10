@@ -61,6 +61,7 @@ class RouteShadowTest(RunCase):
     def set_scenario(self, scenario, check=None):
         super().set_scenario(scenario, check)
         self.env['MR_HOME'] = self.home
+        self.env['MR_TEST_TIME_SCALE'] = '1'
 
     def write_cfg(self):
         raw = {'paths': {'home': self.home, 'cursor_agent': gitfix.FAKE_CURSOR,
