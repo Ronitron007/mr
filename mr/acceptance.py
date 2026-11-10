@@ -5,9 +5,12 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 _VITEST_PAT = re.compile(r"(?:.+/)?[^/]+\.mr\.spec\.ts\Z")
@@ -404,9 +407,27 @@ def _killpg(pgid: int, sig: int) -> None:
         pass
 
 
+@contextmanager
+def fresh_bytecode(env: dict | None = None):
+    """A copy of ``env`` (default: ``os.environ``) whose Python reads and writes bytecode only in a new empty
+    directory, removed on exit. CPython reuses a ``__pycache__`` pyc whose source has the same size and whole-second
+    mtime, so a same-second edit in the tree would run the old code. ``PYTHONDONTWRITEBYTECODE`` still reads that pyc;
+    pytest's assertion rewrite also honors the prefix."""
+    prefix = tempfile.mkdtemp(prefix="mr-pycache-")
+    try:
+        yield {**(os.environ if env is None else env), "PYTHONPYCACHEPREFIX": prefix}
+    finally:
+        shutil.rmtree(prefix, ignore_errors=True)
+
+
 def _run_argv(argv: list[str], cwd: str, timeout_s: float, env: dict | None = None) -> tuple[int, str, bool]:
+    with fresh_bytecode(env) as run_env:
+        return _run_argv_in(argv, cwd, timeout_s, run_env)
+
+
+def _run_argv_in(argv: list[str], cwd: str, timeout_s: float, env: dict) -> tuple[int, str, bool]:
     proc = subprocess.Popen(
-        argv, cwd=cwd, env=os.environ.copy() if env is None else env, stdin=subprocess.DEVNULL,
+        argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True,
     )
     timed = False
