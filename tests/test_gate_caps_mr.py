@@ -220,5 +220,15 @@ class TestAdvisorOpusCap(AdvisorLoopCase, CapsCase):  # caps.advisor_opus
         self.assertEqual(loop.first_rung(("S+A",), _cfg().caps), "S+A")
 
 
+class TestCapsConfig(unittest.TestCase):  # caps.negative
+    def test_negative_cap_is_a_config_error(self):
+        for key in ("claude_rungs_per_task", "opus_rungs_per_task"):
+            with self.subTest(key), self.assertRaisesRegex(config.ConfigError, f"caps.{key}"):
+                _cfg(**{key: -1})
+
+    def test_zero_cap_is_allowed(self):
+        self.assertEqual(_cfg(claude_rungs_per_task=0, opus_rungs_per_task=0).caps.opus_rungs_per_task, 0)
+
+
 if __name__ == "__main__":
     unittest.main()
