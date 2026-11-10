@@ -32,7 +32,7 @@ class HintsRunTest(RunCase):
         path = os.path.join(self.dir, 'task.json')
         with open(path, 'w', encoding='utf-8') as fh:
             json.dump(doc, fh)
-        argv = ['--config', self.cfgpath, 'run', '-f', path, '--repo', self.repo, '--rung', 'G-l', '--once']
+        argv = ['--config', self.cfgpath, 'run', '-f', path, '--repo', self.repo, '--rung', 'G-l', '--once', *self.waive()]
         out, err = io.StringIO(), io.StringIO()
         with patch.dict(os.environ, self.env), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
             code = cli.main(argv)

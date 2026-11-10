@@ -155,6 +155,15 @@ def _commands(cfg, repo_name) -> list[str]:
     return list(found) if found else []
 
 
+def unchecked(cfg, repo_name) -> str | None:
+    """The refusal text when the repo has no hygiene commands, so mr could not check any change; else None."""
+    if _commands(cfg, repo_name):
+        return None
+    return (f"no hygiene commands for {repo_name}, so mr cannot check a change; add hygiene.commands.{repo_name} "
+            f"to the config, for example hygiene: {{commands: {{{repo_name}: [\"npm test\"]}}}}, "
+            "or pass --no-checks to run anyway")
+
+
 def base_failures(tree, cfg, repo_name) -> frozenset[str]:
     """Measured on every run, never cached: the tree sha cannot see untracked deps, toolchains or the timeout."""
     return run_checks(tree, _commands(cfg, repo_name), cfg.timeouts.hygiene_s)

@@ -281,6 +281,11 @@ def _setup(args, t0: float, started_at: str):
         return ec.USAGE
     if DEPRECATED_FIELD in task.deprecated:
         _say(DEPRECATED_LINE)
+    # before the intake judge: it is a model call, and no task type is exempt (each one accepts a diff)
+    if (why := hygiene.unchecked(cfg, os.path.basename(task.repo))) and not getattr(args, "no_checks", False):
+        c = _Ctx(args, cfg, task, feats, rules, [args.rung] if args.rung else list(rules.ladder), t0, started_at)
+        c.facts, c.refused = found, {"check": "no_checks", "commands": [], "reason": why}
+        return c, lambda: c.stop(ec.UNSAFE_GIT, why)
     intake, parts = _intake(args, cfg, task, feats, rules, found)
     if intake is not None:
         decision = router.map_design(intake.decision, cfg, task.params)
@@ -604,6 +609,8 @@ def _task_record(c: _Ctx, ended: str) -> dict:
         **({"plan_rejected": True} if getattr(c, "plan_rejected", False) else {}),
         **({"deferred": c.deferred} if getattr(c, "deferred", None) else {}),
         **({"refused": c.refused} if getattr(c, "refused", None) else {}),
+        **({"no_checks": True} if getattr(getattr(c, "args", None), "no_checks", False)
+           and hygiene.unchecked(c.cfg, os.path.basename(task.repo)) else {}),
         **({"resumed": True, "resumed_from_ts": c.resumed_from} if getattr(c, "resumed_from", None) else {}),
         **_deprecated(c),
         **_intake_counts(c),
