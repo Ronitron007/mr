@@ -345,8 +345,8 @@ def _attempts(raw: dict) -> dict[str, int]:
             raise ConfigError(f"caps.attempts.{diff}: must be int >= 1")
     for key in ("claude_rungs_per_task", "opus_rungs_per_task"):
         num = caps.get(key)
-        if isinstance(num, bool) or not isinstance(num, int):
-            raise ConfigError(f"caps.{key}: must be an int")
+        if isinstance(num, bool) or not isinstance(num, int) or num < 0:
+            raise ConfigError(f"caps.{key}: must be int >= 0")
     return attempts
 
 

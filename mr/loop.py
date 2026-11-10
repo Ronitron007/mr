@@ -63,16 +63,35 @@ def _exit(code: int, reason: str) -> Step:
     return Step("exit", exit=code, reason=reason)
 
 
-def next_step(s: LoopState, *, caps=None, fallback=("G-x",)) -> Step:
+def _fits(r: str, used, claude_rungs: int, opus_rungs: int, claude_cap: int, opus_cap: int) -> bool:
+    """README §4 ok(r). S+A counts as S+ but calls an Opus advisor, so it also needs Opus room."""
+    return (r not in used
+            and (r not in CLAUDE and r != "S+A" or claude_rungs < claude_cap)
+            and (r not in OPUS and r != "S+A" or opus_rungs < opus_cap))
+
+
+def first_rung(ladder, caps) -> str | None:
+    """The first launch obeys ok() too: the first ladder rung that ``caps`` (config Caps) allows, else None."""
+    return next((r for r in ladder
+                 if _fits(r, (), 0, 0, caps.claude_rungs_per_task, caps.opus_rungs_per_task)), None)
+
+
+def caps_stop(ladder, caps) -> str | None:
+    """The exit 1 reason when the Claude and Opus caps allow no rung of ``ladder``, else None."""
+    if first_rung(ladder, caps) is not None:
+        return None
+    return (f"no ladder rung fits the caps (claude_rungs_per_task={caps.claude_rungs_per_task}, "
+            f"opus_rungs_per_task={caps.opus_rungs_per_task}): {' '.join(ladder)}")
+
+
+def next_step(s: LoopState, *, caps=None, claude_cap=CLAUDE_CAP, opus_cap=OPUS_CAP, fallback=("G-x",)) -> Step:
     """README §4 steps 1-7; counters are taken after the failed current rung."""
     if any(r in CLAUDE for r in fallback):
         raise ValueError(f"Claude-denied fallback must be non-Anthropic: {fallback}")  # §0.3
     cap = (caps or CAPS)[s.difficulty]
 
     def ok(r: str) -> bool:
-        return (r not in s.used_rungs
-                and (r not in CLAUDE or s.claude_rungs < CLAUDE_CAP)
-                and (r not in OPUS or s.opus_rungs < OPUS_CAP))
+        return _fits(r, s.used_rungs, s.claude_rungs, s.opus_rungs, claude_cap, opus_cap)
 
     def fb(why: str) -> Step:
         for r in fallback:
@@ -138,7 +157,6 @@ def reviewer_for_grok(cfg) -> str:
 # --- run_task: the full `mr run` cascade (mr-spec §10.2, §10.3, §10.6) -------------------------
 
 _PROMPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "prompts", "implementer.v2.txt")
-_DIFFS = list(CAPS)  # trivial .. critical
 _HANDOFF = ("Previous rung: {rung}, class {cls}. The tree {tree}.\n"
             "Failing acceptance tests: {a}\nNew hygiene failures: {h}\nScope problems: {d}\n{j}"
             "Reviewer findings: {c}\nPrevious patch (relative to the start of the task): {patch}\n")
@@ -187,7 +205,7 @@ def advisor_rung(c, rung: str) -> str:
     A ``run_rung`` of None means even plain S+ does not fit the guard: return "S+" and let the
     normal guard-deny path handle it.
     """
-    if rung != "S+":
+    if rung != "S+" or c.counters["opus_rungs"] >= c.cfg.caps.opus_rungs_per_task:  # no Opus room: no advisor
         return rung
     a, cfg, task, d = c.args, c.cfg, c.task, c.d
     cfg_adv = cfg.advisor or {}
@@ -915,7 +933,9 @@ def _step(c, cur: str, cls: str) -> Step:
         opus_rungs=c.counters["opus_rungs"], infra_retries_this_rung=c.infra,
         effort_up_used=tuple(c.effort_up_used), guard_allows=True,
         replans=c.replans)
-    kw = {"caps": c.cfg.caps.attempts, "fallback": tuple(c.cfg.fallback_claude_denied)}
+    caps = c.cfg.caps
+    kw = {"caps": caps.attempts, "claude_cap": caps.claude_rungs_per_task, "opus_cap": caps.opus_rungs_per_task,
+          "fallback": tuple(c.cfg.fallback_claude_denied)}
     step = next_step(s, **kw)
     if step.action == "rung" and step.rung in CLAUDE and droid_twin(c.cfg, step.rung) is None:
         g = guard.check(step.rung, c.cfg)
@@ -1135,7 +1155,7 @@ def resume_task(c, p: dict) -> int:
         c.uncovered_reqs = ()
         if (code := _plan_finish(c, _plan_result(p), p["row"], p["stronger"])) is not None:
             return code
-        return _ladder(c, c.ladder[0], "implementer", "(first attempt)")
+        return _first_launch(c)
     if err := _apply_saved_patch(c):
         return c.stop(exitcodes.UNSAFE_GIT, err)
     return _ladder(c, p["rung"], p["kind"], p["handoff"], p)
@@ -1157,16 +1177,25 @@ def run_task(c) -> int:
     d = c.d
     if not c.ladder:
         return c.stop(exitcodes.NOT_ACCEPTED, "empty ladder after the budget filter")
+    if first_rung(c.ladder, cfg.caps) is None:  # before the planner: no model call at all
+        return _first_launch(c)
     c.reset_tree = patches.take_reset_tree(task.repo)
     # the baseline is the tree before the planner writes its red tests, so they cannot hide a new failure
     c.base_set = hygiene.base_failures(task.repo, cfg, os.path.basename(task.repo))
     if (code := refuse_unparsed(c, c.base_set)) is not None:
         return code
     c.save_state("plan")
-    if d.planner or (d.route == "cascade" and _DIFFS.index(d.difficulty) >= _DIFFS.index("medium")):
+    if router.planner_rung(d, cfg) is not None:
         if (code := _plan(c)) is not None:
             return code
-    return _ladder(c, c.ladder[0], "implementer", "(first attempt)")
+    return _first_launch(c)
+
+
+def _first_launch(c) -> int:
+    """The first implementer rung, or exit 1 when the Claude and Opus caps allow no ladder rung."""
+    if stop := caps_stop(c.ladder, c.cfg.caps):
+        return c.stop(exitcodes.NOT_ACCEPTED, stop)
+    return _ladder(c, first_rung(c.ladder, c.cfg.caps), "implementer", "(first attempt)")
 
 
 def _ladder(c, cur: str, kind: str, handoff: str, pending: dict | None = None) -> int:
