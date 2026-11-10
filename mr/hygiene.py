@@ -151,8 +151,8 @@ def run_checks(tree, commands: list[str], timeout_s) -> frozenset[str]:
 
 
 def _commands(cfg, repo_name) -> list[str]:
-    found = (cfg.hygiene.get("commands") or {}).get(repo_name)
-    return list(found) if found else []
+    found = (cfg.hygiene.get("commands") or {}).get(repo_name) or []
+    return [cmd for cmd in found if isinstance(cmd, str) and cmd.strip()]
 
 
 def unchecked(cfg, repo_name) -> str | None:

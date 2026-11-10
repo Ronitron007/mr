@@ -1,5 +1,8 @@
 """gate.no_checks: `mr run` refuses a repo with no hygiene commands before any model call; --no-checks runs anyway."""
 import json
+import os
+import shutil
+import tempfile
 import unittest
 
 from mr import exitcodes
@@ -142,3 +145,44 @@ class TestSetupLine(unittest.TestCase):
         self.assertEqual(len(lines), 1, out)
         self.assertIn("--no-checks", lines[0])
         self.assertEqual(load(str(target)).hygiene["commands"], {}, "setup does not guess commands")
+
+
+class TestBlankCommandsRefused(LoopCase):
+    """no_checks.blank_commands: a blank entry checks nothing, so it does not count as a command."""
+
+    def test_blank_and_space_only_commands_exit_4_before_any_model_call(self):
+        for cmds in ([""], ["   "], ["", " \t"]):
+            with self.subTest(cmds=cmds):
+                self.hygiene_cmds = cmds
+                self.write_cfg()
+                self.cursor({"files": README}, model=GL)
+                code, _doc, err = self.run_json(*TRIVIAL)
+                self.assertEqual(code, 4, err)
+                self.assertEqual(self.calls(), [], "no model call")
+                _refusal_lines(self, err)
+                self.assertEqual(self.records("task")[-1]["refused"]["check"], "no_checks")
+
+    def test_blank_commands_run_with_no_checks(self):
+        self.hygiene_cmds = [""]
+        self.write_cfg()
+        self.cursor({"files": README}, model=GL)
+        code, _doc, err = self.run_json("--no-checks", *TRIVIAL)
+        self.assertEqual(code, 0, err)
+        self.assertIs(self.only_task()["no_checks"], True)
+
+
+class TestMixedCommandsKeepTheRealOne(unittest.TestCase):
+    def test_blank_entries_drop_and_the_real_command_still_runs(self):
+        from mr import hygiene
+        from tests.test_hygiene import _cfg
+        tmp = tempfile.mkdtemp(prefix="mr-nochk-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        failing = "python3 -c \"print('src/a.ts:1:1: boom'); raise SystemExit(1)\""
+        cfg = _cfg(os.path.join(tmp, "home"), {"demo": ["", "   ", failing]})
+        self.assertIsNone(hygiene.unchecked(cfg, "demo"))
+        sig = hygiene.hygiene(tmp, cfg, frozenset(), "demo")
+        self.assertFalse(sig.skipped, sig)
+        self.assertFalse(sig.ok, sig)
+        self.assertEqual(len(sig.new_failures), 1, sig)
+        self.assertIsNotNone(hygiene.unchecked(_cfg(os.path.join(tmp, "home"), {"demo": ["", "  "]}), "demo"))
+
