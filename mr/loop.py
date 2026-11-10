@@ -926,7 +926,7 @@ def _step(c, cur: str, cls: str) -> Step:
 
 
 _ARGS = ("budget", "advisor", "advisor_consults", "advisor_slot", "wait_lock_s", "experiment", "yes", "judge",
-         "classifier", "route", "rung")
+         "classifier", "route", "rung", "no_checks")
 
 
 def _defer_on(c, check: str) -> bool:

@@ -698,6 +698,8 @@ def _blocks(raw: dict) -> None:
     for key in ("review_required", "escalation", "hygiene", "worktrees"):  # cursor_paid (retired) is ignored if present
         if not isinstance(raw.get(key), dict):
             raise ConfigError(f"{key}: missing")
+    if not isinstance(raw["hygiene"].get("commands") or {}, dict):
+        raise ConfigError("hygiene.commands: expected a mapping of repo name to a list of commands")
     _advisor_block(raw)
     timeouts = raw.get("timeouts")
     if not isinstance(timeouts, dict) or not isinstance(timeouts.get("rung_s"), dict):

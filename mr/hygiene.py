@@ -151,8 +151,17 @@ def run_checks(tree, commands: list[str], timeout_s) -> frozenset[str]:
 
 
 def _commands(cfg, repo_name) -> list[str]:
-    found = (cfg.hygiene.get("commands") or {}).get(repo_name)
-    return list(found) if found else []
+    found = (cfg.hygiene.get("commands") or {}).get(repo_name) or []
+    return [cmd for cmd in found if isinstance(cmd, str) and cmd.strip()]
+
+
+def unchecked(cfg, repo_name) -> str | None:
+    """The refusal text when the repo has no hygiene commands, so mr could not check any change; else None."""
+    if _commands(cfg, repo_name):
+        return None
+    return (f"no hygiene commands for {repo_name}, so mr cannot check a change; add hygiene.commands.{repo_name} "
+            f"to the config, for example hygiene: {{commands: {{{repo_name}: [\"npm test\"]}}}}, "
+            "or pass --no-checks to run anyway")
 
 
 def base_failures(tree, cfg, repo_name) -> frozenset[str]:
