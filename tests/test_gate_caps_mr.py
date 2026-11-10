@@ -158,5 +158,23 @@ class TestRouteRoles(unittest.TestCase):
                       "scope S+ (signal D has findings after H and A pass)", out)
 
 
+class TestOnceCaps(CapsCase):  # caps.once_rung_bypass
+    def test_once_rung_over_the_caps_makes_no_model_call(self):
+        for rung, model in (("O", OPUS), ("S", SONNET)):
+            with self.subTest(rung):
+                self.set_caps(0, 0)
+                self.set_scenario({"claude": {model: [{"files": README}]}})
+                code, _doc, err = self.run_json("--once", "--rung", rung, "--type", "docs", "--difficulty", "trivial")
+                self.assertEqual(self.models(), [])
+                self.assertEqual(code, 1, err)
+                self.assertIn("no ladder rung fits the caps", err)
+
+    def test_once_rung_within_the_caps_still_runs(self):
+        self.set_scenario({"claude": {SONNET: [{"files": README}]}})
+        code, _doc, err = self.run_json("--once", "--rung", "S", "--type", "docs", "--difficulty", "trivial")
+        self.assertEqual(self.models(), [SONNET])
+        self.assertEqual(code, 0, err)
+
+
 if __name__ == "__main__":
     unittest.main()

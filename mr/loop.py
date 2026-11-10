@@ -76,6 +76,14 @@ def first_rung(ladder, caps) -> str | None:
                  if _fits(r, (), 0, 0, caps.claude_rungs_per_task, caps.opus_rungs_per_task)), None)
 
 
+def caps_stop(ladder, caps) -> str | None:
+    """The exit 1 reason when the Claude and Opus caps allow no rung of ``ladder``, else None."""
+    if first_rung(ladder, caps) is not None:
+        return None
+    return (f"no ladder rung fits the caps (claude_rungs_per_task={caps.claude_rungs_per_task}, "
+            f"opus_rungs_per_task={caps.opus_rungs_per_task}): {' '.join(ladder)}")
+
+
 def next_step(s: LoopState, *, caps=None, claude_cap=CLAUDE_CAP, opus_cap=OPUS_CAP, fallback=("G-x",)) -> Step:
     """README §4 steps 1-7; counters are taken after the failed current rung."""
     if any(r in CLAUDE for r in fallback):
@@ -1185,12 +1193,9 @@ def run_task(c) -> int:
 
 def _first_launch(c) -> int:
     """The first implementer rung, or exit 1 when the Claude and Opus caps allow no ladder rung."""
-    if (rung := first_rung(c.ladder, c.cfg.caps)) is None:
-        caps = c.cfg.caps
-        return c.stop(exitcodes.NOT_ACCEPTED,
-                      f"no ladder rung fits the caps (claude_rungs_per_task={caps.claude_rungs_per_task}, "
-                      f"opus_rungs_per_task={caps.opus_rungs_per_task}): {' '.join(c.ladder)}")
-    return _ladder(c, rung, "implementer", "(first attempt)")
+    if stop := caps_stop(c.ladder, c.cfg.caps):
+        return c.stop(exitcodes.NOT_ACCEPTED, stop)
+    return _ladder(c, first_rung(c.ladder, c.cfg.caps), "implementer", "(first attempt)")
 
 
 def _ladder(c, cur: str, kind: str, handoff: str, pending: dict | None = None) -> int:
