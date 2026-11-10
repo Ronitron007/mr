@@ -53,6 +53,27 @@ class TestCodexRepro(LoopCase):
         self.assertEqual(self.models(), [GH])
         self.assertEqual([(r["rung"], r["class"]) for r in st["rungs"]], [("G-h", None)])
 
+    def assert_stopped_as(self, status, rungs):
+        code, st, err = self.run_status(status)
+        self.assertNotEqual(code, 0, err)
+        self.assertNotEqual(st["outcome"], "accepted", f"{status!r} must not be accepted")
+        self.assertEqual([(r["rung"], r["class"]) for r in st["rungs"]], rungs)
+
+    def test_title_case_blocked_is_not_accepted(self):
+        self.assert_stopped_as("Blocked", [("G-h", "tried_wrong"), ("G-m", "tried_wrong"), ("S", "tried_wrong")])
+
+    def test_upper_case_blocked_is_not_accepted(self):
+        self.assert_stopped_as("BLOCKED", [("G-h", "tried_wrong"), ("G-m", "tried_wrong"), ("S", "tried_wrong")])
+
+    def test_pushback_with_a_trailing_space_is_not_accepted(self):
+        self.assert_stopped_as("pushback ", [("G-h", "spec_suspect")])
+
+    def test_title_case_done_is_still_accepted(self):
+        code, st, err = self.run_status("Done")
+        self.assertEqual(code, 0, err)
+        self.assertEqual(st["outcome"], "accepted")
+        self.assertEqual([(r["rung"], r["class"]) for r in st["rungs"]], [("G-h", None)])
+
 
 class TestPlannedTask(LoopCase):
     """A medium task with a planner: the patch passes D, H and A, so only the self-report can stop it."""

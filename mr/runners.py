@@ -54,7 +54,8 @@ class RunResult:
 # --- parsing ----------------------------------------------------------------
 
 def parse_mr_result(text: str, tag: str = "MR_RESULT") -> dict | None:
-    """§7.3: last matching line of the last 50 lines; its JSON must be an object."""
+    """§7.3: last matching line of the last 50 lines; its JSON must be an object. A string status is stripped and
+    lowercased here, so every reader sees `blocked` for "BLOCKED" or "Blocked " (self_report.status_case)."""
     prefix = f"{tag} "
     found = None
     for line in (text or "").splitlines()[-MR_RESULT_WINDOW:]:
@@ -66,7 +67,11 @@ def parse_mr_result(text: str, tag: str = "MR_RESULT") -> dict | None:
         data = json.loads(found)
     except ValueError:
         return None
-    return data if isinstance(data, dict) else None
+    if not isinstance(data, dict):
+        return None
+    if isinstance(data.get("status"), str):
+        data["status"] = data["status"].strip().lower()
+    return data
 
 
 def _envelope(stdout: str) -> dict | None:
