@@ -51,6 +51,7 @@ class Inputs:
     prior_attempts: tuple[dict, ...]
     D_status: str | None = None  # pass | flagged | violation; None when the scope judge is off
     scope_verdict: str | None = None  # accept | repair | reject | unavailable
+    A_run_errors: tuple[str, ...] = ()  # why the A run was unhealthy (timeout, exit code); never shared test ids
 
     @classmethod
     def from_dict(cls, d: dict) -> "Inputs":
@@ -73,6 +74,7 @@ class Inputs:
             prior_attempts=tuple(d["prior_attempts"]),
             D_status=d.get("D_status"),
             scope_verdict=d.get("scope_verdict"),
+            A_run_errors=tuple(d.get("A_run_errors") or ()),
         )
 
 
@@ -224,12 +226,12 @@ def classify(i: Inputs) -> FailureRules:
         i.mapped_files_touched
         and i.H
         and s == "done"
-        and (i.A_failing or i.C in ("fail", "unclear"))
+        and (i.A_failing or i.A_run_errors or i.C in ("fail", "unclear"))
         and two is None
     ):
         why = []
-        if i.A_failing:
-            why.append(f"A failing: {list(i.A_failing)}")
+        if i.A_failing or i.A_run_errors:
+            why.append(f"A failing: {list(i.A_failing + i.A_run_errors)}")
         if i.C in ("fail", "unclear"):
             why.append(f"C {i.C}")
         fired["tried_wrong"] = [

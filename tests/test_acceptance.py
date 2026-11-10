@@ -287,6 +287,7 @@ class TestVitestReport(unittest.TestCase):
         path = "src/__tests__/a.mr.spec.ts"
         checklist = _checklist(path, ["toggles off"], "it('toggles off'", [path], [path])
         report = {
+            "success": True, "numTotalTests": 1, "numPassedTests": 1, "numFailedTests": 0,
             "testResults": [{
                 "name": path,
                 "assertionResults": [{"title": "toggles off", "status": "passed"}],
@@ -302,6 +303,7 @@ class TestVitestReport(unittest.TestCase):
         tree = "/repo/app"
         path = "src/features/chat/__tests__/muteSettings.mr.spec.ts"
         report = {
+            "success": False, "numTotalTests": 0, "numPassedTests": 0, "numFailedTests": 0,
             "testResults": [{
                 "name": os.path.join(tree, path),
                 "status": "failed",

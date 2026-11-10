@@ -455,7 +455,8 @@ def _plan_call(c, rung, prior_errors=None):
     c.seq += 1
     started, t0 = now_ist(), time.time()
     res = planner.plan(task, cfg=cfg, tree=task.repo, task_id=task.id, attempt=c.seq,
-                       difficulty=c.d.difficulty, rung=rung, files=c.d.files, prior_errors=prior_errors)
+                       difficulty=c.d.difficulty, rung=rung, files=c.d.files, prior_errors=prior_errors,
+                       tests_optional=c.d.type in planner.NO_TEST_TYPES)
     c.n_plan += res.attempts
     for rr, guarded in res.spend:
         pipeline.add_cost(c.cost, rr, guarded)
@@ -518,8 +519,12 @@ def _plan(c) -> int | None:
 
 
 def _plan_finish(c, res, row, stronger: bool = False) -> int | None:
-    """The plan judge, the stronger re-plan and the checklist state after the first planner call."""
+    """The plan judge, the stronger re-plan and the checklist state after the first planner call. A plan with no
+    tests for a task type that has none (planner.NO_TEST_TYPES) runs plan-less at once: no judge, no re-plan."""
     cfg, task = c.cfg, c.task
+    if res.status == "no_tests":
+        c.log.append(row)
+        return _plan_less(c, f"{planner.NO_TESTS} for a {c.d.type} task; running without a plan")
     if (getattr(cfg, "plan", None) or {}).get("judge", "on") == "on":
         res = _recover(c, res, row, stronger)
         if c.pending:
@@ -547,9 +552,9 @@ def _plan_finish(c, res, row, stronger: bool = False) -> int | None:
     return None
 
 
-def _plan_less(c) -> None:
+def _plan_less(c, note: str = PLAN_REJECTED) -> None:
     """No usable plan: no checklist, the no-checklist D limits, and a required review of at least S+."""
-    print(PLAN_REJECTED, file=sys.stderr)
+    print(note, file=sys.stderr)
     if getattr(c, "plan_judge_reason", None):
         print(f"plan judge: {c.plan_judge_reason}", file=sys.stderr)
     c.plan_rejected = True
@@ -792,7 +797,7 @@ def _rung(c, code: str, kind: str, handoff: str) -> dict:
         out["D"], out["D_warn"] = list(dres.reasons), list(dres.warnings)
         out["H"] = list(hres.new_failures) if hres else []
         if sa:
-            out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing]
+            out["A"] = ([f"{f}::{t}" for f, t in sa.failed + sa.missing + sa.other_failed] + list(sa.run_errors)
                         + [f"locked: {p}" for p in sa.lock_violations])
         green = (not (infra or empty) and checkable and bool(sig["H"]) and sig["A"] is not False
                  and not classify.stopped(rr.mr_result))
@@ -887,12 +892,13 @@ def _classify(c, rung, rr, dres, hres, sa, rv, infra: bool, judged: bool = False
     groups = (list(c.checklist["files_map"].values()) if c.checklist
               else [named] if named else [])
     touched = all(any(f in dres.files for f in g) for g in groups) if groups else bool(dres.files)
-    failing = tuple(f"{f}::{t}" for f, t in sa.failed + sa.missing) if sa else ()
+    failing = tuple(f"{f}::{t}" for f, t in sa.failed + sa.missing + sa.other_failed) if sa else ()
     h_ok = hres.ok if hres else True
     inputs = classify.Inputs(
         model=rung.model, rc=rr.rc, is_error=bool(rr.is_error), timed_out=rr.timed_out,
         wrapper_exit_75=False, hook_block=False, has_envelope=rr.has_envelope, diff_files=dres.files,
         diff_loc=dres.loc, mapped_files_touched=touched, H=h_ok, D=dres.ok, A_failing=failing,
+        A_run_errors=tuple(sa.run_errors) if sa else (),
         C=rv.verdict if rv else None, mr_result=rr.mr_result, prior_attempts=tuple(c.prior),
         D_status=dres.status if judged else None, scope_verdict=sv)
     rules = classify.classify(inputs)
@@ -1066,7 +1072,8 @@ def _resume_rung(c, p: dict) -> dict:
         code=code, kind=p["kind"], handoff=p["handoff"], attempt=p["attempt"], started=p["row"]["started_at"],
         rr=SimpleNamespace(**rr), guarded=None, droid_try=None, sig=sig, out=out, viol=None, infra=False, dres=dres,
         hres=SimpleNamespace(ok=True, new_failures=tuple(out["H"])) if sig["H"] is not None else None,
-        sa=SimpleNamespace(ok=True, failed=(), missing=(), lock_violations=()) if sig["A"] is not None else None,
+        sa=SimpleNamespace(ok=True, failed=(), missing=(), lock_violations=(), run_errors=(),
+                           other_failed=()) if sig["A"] is not None else None,
         aud=SimpleNamespace(**saved) if saved else None, green=not classify.stopped(rr["mr_result"]), patch=patch,
         row=p["row"])
     if p["check"] == "review":
