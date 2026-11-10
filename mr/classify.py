@@ -87,7 +87,12 @@ def _status(mr_result: dict | None) -> str | None:
     if not isinstance(mr_result, dict):
         return None
     status = mr_result.get("status")
-    return status if isinstance(status, str) else None
+    return status.strip().lower() if isinstance(status, str) else None
+
+
+def stopped(mr_result: dict | None) -> bool:
+    """The implementer said it did not finish. mr never accepts that attempt, whatever D, H, A and C say."""
+    return _status(mr_result) in ("blocked", "pushback")
 
 
 def is_complete(i: Inputs) -> bool:
