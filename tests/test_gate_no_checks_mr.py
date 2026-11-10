@@ -186,3 +186,22 @@ class TestMixedCommandsKeepTheRealOne(unittest.TestCase):
         self.assertEqual(len(sig.new_failures), 1, sig)
         self.assertIsNotNone(hygiene.unchecked(_cfg(os.path.join(tmp, "home"), {"demo": ["", "  "]}), "demo"))
 
+
+class TestListCommandsConfigError(LoopCase):
+    """no_checks.list_config_crash: hygiene.commands as a list is a config error before any model call."""
+
+    def write_cfg(self):
+        super().write_cfg()
+        with open(self.cfgpath, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        raw["hygiene"] = {"commands": ["python3 -m unittest"]}
+        with open(self.cfgpath, "w", encoding="utf-8") as fh:
+            json.dump(raw, fh)
+
+    def test_list_commands_exit_2_with_a_config_error(self):
+        self.cursor({"files": README}, model=GL)
+        code, _out, err = self.mr(*TRIVIAL)
+        self.assertEqual(code, exitcodes.USAGE, err)
+        self.assertIn("config error: hygiene.commands", err)
+        self.assertNotIn("Traceback", err)
+        self.assertEqual(self.calls(), [], "no model call")
