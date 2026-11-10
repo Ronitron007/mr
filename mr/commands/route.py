@@ -212,6 +212,8 @@ _WHEN = {"plan": "the plan is still invalid after a retry", "scope": "signal D h
 
 def _roles(cfg, d: Decision, tags) -> dict:
     """The model roles `mr run` calls beside the ladder, as loop.run_task picks them. Shown only, never changed."""
+    if d.ladder and (stop := loop.caps_stop(d.ladder, cfg.caps)):  # mr run exits 1 before any role runs
+        return {"planner": None, "reviewer": None, "judges": [], "stop": {"exit": ec.NOT_ACCEPTED, "reason": stop}}
     high = isolation.high_risk(tags)
     if high:
         d = router.require_strong(d)
@@ -250,6 +252,7 @@ def _explain(task, decision: Decision, features, roles: dict) -> str:
             f"planner: {roles['planner'] or '-'}",
             f"reviewer: {roles['reviewer'] or '-'}",
             f"judges: {judges}",
+            *([f"run: stops with exit {roles['stop']['exit']}: {roles['stop']['reason']}"] if roles.get("stop") else []),
             f"needs_review: {decision.needs_review}",
             f"needs_clarification: {decision.needs_clarification}",
             f"load_bearing: {decision.load_bearing}",

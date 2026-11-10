@@ -158,6 +158,22 @@ class TestRouteRoles(unittest.TestCase):
         self.assertIn("judges: plan S+ (the plan is still invalid after a retry), "
                       "scope S+ (signal D has findings after H and A pass)", out)
 
+    def test_caps_with_no_fitting_rung_show_the_stop(self):  # caps.route_preview_stops
+        with open(self.cfgpath, "w", encoding="utf-8") as fh:
+            json.dump({"paths": {"home": os.path.join(self.root, "home")},
+                       "caps": {"claude_rungs_per_task": 0, "opus_rungs_per_task": 0}}, fh)
+        doc = self.route("--type", "bugfix", "--difficulty", "critical")
+        roles = doc["roles"]
+        self.assertEqual((roles["planner"], roles["reviewer"], roles["judges"]), (None, None, []))
+        self.assertEqual(roles["stop"]["exit"], 1)
+        self.assertIn("no ladder rung fits the caps", roles["stop"]["reason"])
+        out = self.route("--type", "bugfix", "--difficulty", "critical", json_out=False)
+        self.assertIn("planner: -\n", out)
+        self.assertIn("run: stops with exit 1: no ladder rung fits the caps", out)
+
+    def test_fitting_caps_show_no_stop(self):
+        self.assertIsNone(self.route("--type", "code", "--difficulty", "hard")["roles"].get("stop"))
+
 
 class TestOnceCaps(CapsCase):  # caps.once_rung_bypass
     def test_once_rung_over_the_caps_makes_no_model_call(self):
