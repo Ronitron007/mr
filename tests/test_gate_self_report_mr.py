@@ -1,9 +1,12 @@
 """gate.self_report: a blocked or pushback MR_RESULT is never accepted, even with green checks (issue #1 finding 4)."""
+import glob
 import json
+import os
 import unittest
 
 from tests import gitfix
-from tests.test_loop_run import GH, GM, GX, OPUS, PLAN, REVIEW_PASS, SONNET, LoopCase, mul
+from tests.test_aj10_defer_mr import ALLOW, DENY, DeferCase
+from tests.test_loop_run import GH, GL, GM, GX, OPUS, PLAN, REVIEW_PASS, SONNET, LoopCase, mul
 
 SCOPE_NEEDED = {"type": "scope_needed", "item": "I1", "evidence": "calc.py:1 cannot finish safely"}
 
@@ -104,6 +107,60 @@ class TestPlannedTask(LoopCase):
         self.assertEqual(self.models(), [GH, GX, SONNET])
         self.assertEqual([(r["rung"], r["class"]) for r in st["rungs"]], [("G-x", None)])
         self.assertEqual(st["outcome"], "accepted")
+
+
+class TestLegacyResume(DeferCase):
+    """A state saved before the status fold keeps `Blocked` or `Pushback` verbatim. A resume must still stop it."""
+    check_judge = {"scope": "on"}
+    SCOPE_OK = json.dumps({"verdict": "accept", "reason": "ok", "instructions": [], "findings_ok": []})
+    CRASH = {"rc": 1, "is_error": True, "result": ""}
+
+    def save_status(self, tid, status):
+        path = glob.glob(os.path.join(self.home, "**", tid, "state.json"), recursive=True)[0]
+        with open(path, encoding="utf-8") as fh:
+            st = json.load(fh)
+        pushback = SCOPE_NEEDED if status.lower() == "pushback" else None
+        st["pending"]["rr"]["mr_result"] = json.loads(said(status, pushback)[len("MR_RESULT "):])
+        with open(path, "w", encoding="utf-8") as fh:
+            json.dump(st, fh)
+
+    def resume_with(self, tid, status):
+        self.save_status(tid, status)
+        code, _, text = self.cli("--json", "resume", tid)
+        st = self.state_of(tid)
+        self.assertNotEqual(st.get("outcome"), "accepted", f"saved {status!r} must not resume to accepted: {text}")
+        self.assertNotEqual(code, 0, text)
+
+    def resume_scope(self, status):
+        code, doc, text = self.defer_scope(check=DENY)
+        self.assertEqual(code, 75, text)
+        self.guard(ALLOW)
+        readme = {"files": {"README.md": "# test repo\nfixed typo\n"}}
+        self.set_scenario({"cursor": {GL: [readme], GM: [readme], GH: [{"result": json.dumps(PLAN)}]},
+                           "claude": {SONNET: [{"result": self.SCOPE_OK}, {"result": REVIEW_PASS}]}}, check=ALLOW)
+        self.resume_with(doc["task"], status)
+
+    def resume_review(self, status):
+        self.set_scenario({"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul("*")]},
+                           "claude": {SONNET: [self.CRASH, self.CRASH]}})
+        code, doc, text = self.go("--type", "bugfix", "--difficulty", "medium")
+        self.assertEqual(code, 75, text)
+        self.set_scenario({"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [mul("*")], GM: [mul("*")]},
+                           "claude": {SONNET: [self.CRASH, self.CRASH, {"result": REVIEW_PASS}, {"result": REVIEW_PASS}],
+                                      OPUS: [mul("*")]}})
+        self.resume_with(doc["task"], status)
+
+    def test_scope_deferred_title_case_blocked_is_not_accepted(self):
+        self.resume_scope("Blocked")
+
+    def test_scope_deferred_title_case_pushback_is_not_accepted(self):
+        self.resume_scope("Pushback")
+
+    def test_review_deferred_title_case_blocked_is_not_accepted(self):
+        self.resume_review("Blocked")
+
+    def test_review_deferred_title_case_pushback_is_not_accepted(self):
+        self.resume_review("Pushback")
 
 
 if __name__ == "__main__":

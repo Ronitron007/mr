@@ -87,7 +87,7 @@ def _status(mr_result: dict | None) -> str | None:
     if not isinstance(mr_result, dict):
         return None
     status = mr_result.get("status")
-    return status if isinstance(status, str) else None
+    return status.strip().lower() if isinstance(status, str) else None
 
 
 def stopped(mr_result: dict | None) -> bool:
