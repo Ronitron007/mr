@@ -12,6 +12,7 @@ from mr import cli, config, loop
 from mr.defaults import defaults
 from tests import gitfix
 from tests.test_loop import _rows, _state
+from tests.test_advisor_loop import OPUS_USAGE, SF_TEXT, AdvisorLoopCase
 from tests.test_loop_run import GH, GL, GX, OPUS, PLAN, README, REVIEW_PASS, SONNET, LoopCase, mul
 
 
@@ -174,6 +175,33 @@ class TestOnceCaps(CapsCase):  # caps.once_rung_bypass
         code, _doc, err = self.run_json("--once", "--rung", "S", "--type", "docs", "--difficulty", "trivial")
         self.assertEqual(self.models(), [SONNET])
         self.assertEqual(code, 0, err)
+
+
+class TestAdvisorOpusCap(AdvisorLoopCase, CapsCase):  # caps.advisor_opus
+    def advisors(self):
+        return [c["argv"][c["argv"].index("--advisor") + 1] for c in self.claude_calls() if "--advisor" in c["argv"]]
+
+    def test_zero_opus_cap_runs_splus_without_the_advisor(self):
+        self.set_caps(2, 0)
+        self.set_scenario({"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [{"result": REVIEW_PASS}]},
+                           "claude": {SONNET: [dict(mul("*"), advisor=dict(OPUS_USAGE))]}})
+        code, _doc, err = self.run_json("--type", "bugfix", "--difficulty", "hard", "--rung", "S+", text=SF_TEXT)
+        self.assertEqual([c["model"] for c in self.claude_calls()], [SONNET], err)
+        self.assertEqual(self.advisors(), [])
+        self.assertEqual(code, 0, err)
+
+    def test_default_caps_still_launch_sa(self):
+        self.set_scenario({"cursor": {GH: [{"result": json.dumps(PLAN)}], GX: [{"result": REVIEW_PASS}]},
+                           "claude": {SONNET: [dict(mul("*"), advisor=dict(OPUS_USAGE))]}})
+        code, _doc, err = self.run_json("--type", "bugfix", "--difficulty", "hard", "--rung", "S+", text=SF_TEXT)
+        self.assertEqual(self.advisors(), [OPUS])
+        self.assertEqual(code, 0, err)
+
+    def test_explicit_sa_rung_needs_opus_room(self):
+        caps = _cfg(opus_rungs_per_task=0).caps
+        self.assertIsNone(loop.first_rung(("S+A",), caps))
+        self.assertIsNone(loop.first_rung(("S+A",), _cfg(claude_rungs_per_task=0).caps))
+        self.assertEqual(loop.first_rung(("S+A",), _cfg().caps), "S+A")
 
 
 if __name__ == "__main__":

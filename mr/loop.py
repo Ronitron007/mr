@@ -64,10 +64,10 @@ def _exit(code: int, reason: str) -> Step:
 
 
 def _fits(r: str, used, claude_rungs: int, opus_rungs: int, claude_cap: int, opus_cap: int) -> bool:
-    """README §4 ok(r)."""
+    """README §4 ok(r). S+A counts as S+ but calls an Opus advisor, so it also needs Opus room."""
     return (r not in used
-            and (r not in CLAUDE or claude_rungs < claude_cap)
-            and (r not in OPUS or opus_rungs < opus_cap))
+            and (r not in CLAUDE and r != "S+A" or claude_rungs < claude_cap)
+            and (r not in OPUS and r != "S+A" or opus_rungs < opus_cap))
 
 
 def first_rung(ladder, caps) -> str | None:
@@ -205,7 +205,7 @@ def advisor_rung(c, rung: str) -> str:
     A ``run_rung`` of None means even plain S+ does not fit the guard: return "S+" and let the
     normal guard-deny path handle it.
     """
-    if rung != "S+":
+    if rung != "S+" or c.counters["opus_rungs"] >= c.cfg.caps.opus_rungs_per_task:  # no Opus room: no advisor
         return rung
     a, cfg, task, d = c.args, c.cfg, c.task, c.d
     cfg_adv = cfg.advisor or {}
