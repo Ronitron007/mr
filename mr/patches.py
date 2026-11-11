@@ -1,6 +1,6 @@
 """Patches v1: reset_tree, cumulative temp-index patches, reverse-apply reset, FINAL.md (spec §10.3, §10.2; plan §6.4, §6.5).
 
-This is the only module that writes to the user's tree. Rules:
+This is the only module that writes to the user's tree, apart from `acceptance.purge_bytecode`. Rules:
 - all index work uses a temporary GIT_INDEX_FILE; the real index and HEAD are never touched;
 - no git checkout/clean/reset/stash anywhere; the only tree write is `git apply -R` in reset();
 - when in doubt, change nothing and report ok=False (caller exits 4).
