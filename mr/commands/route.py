@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import asdict
 
-from mr import classifier, facts, shadow
+from mr import checkjudge, classifier, facts, isolation, loop, review, router, shadow
 from mr import exitcodes as ec
 from mr.config import ConfigError, load
 from mr.gitmeta import read_head
@@ -56,8 +56,10 @@ def run(args) -> int:
     if MAPPED in decision.reasons:
         print(f"{MAPPED}: planned by an Opus planner and reviewed at S+ at least", file=sys.stderr)
     code = _exit_code(decision)
+    roles = _roles(cfg, decision, router.path_tags(features, found))
     if getattr(args, "json", False):
         payload = _payload(task, features, decision, code)
+        payload["roles"] = roles
         if intake is not None:
             payload["judge"] = dict(intake.judge)
             payload["overrides"] = [asdict(o) for o in intake.overrides]
@@ -68,7 +70,7 @@ def run(args) -> int:
             payload["judge_shadow"] = shadow.route_summary(jdg)
         print(json.dumps(payload, ensure_ascii=False))
     else:
-        print(_explain(task, decision, features))
+        print(_explain(task, decision, features, roles))
         print(_facts_line(found))
         if intake is not None:
             print(_intake_line(intake))
@@ -205,10 +207,37 @@ def _jsonable(obj):
     return obj
 
 
-def _explain(task, decision: Decision, features) -> str:
+_WHEN = {"plan": "the plan is still invalid after a retry", "scope": "signal D has findings after H and A pass"}
+
+
+def _roles(cfg, d: Decision, tags) -> dict:
+    """The model roles `mr run` calls beside the ladder, as loop.run_task picks them. Shown only, never changed."""
+    if d.ladder and (stop := loop.caps_stop(d.ladder, cfg.caps)):  # mr run exits 1 before any role runs
+        return {"planner": None, "reviewer": None, "judges": [], "stop": {"exit": ec.NOT_ACCEPTED, "reason": stop}}
+    high = isolation.high_risk(tags)
+    if high:
+        d = router.require_strong(d)
+    risk = "high" if high else d.risk
+    planner = router.planner_rung(d, cfg)
+    first = loop.first_rung(d.ladder, cfg.caps)
+    reviewer = None
+    if d.needs_review and first is not None:
+        reviewer = review.reviewer_rung(review.family(cfg.rungs[first].model), d.risk, cfg, d.required_review)
+    judges = []
+    if planner is not None and (getattr(cfg, "plan", None) or {}).get("judge", "on") == "on":
+        rung = checkjudge.plan_rung(cfg, planner=planner, difficulty=d.difficulty, risk=risk)
+        judges.append({"check": "plan", "rung": rung, "when": _WHEN["plan"]})
+    if first is not None and (getattr(cfg, "check_judge", None) or {}).get("scope") == "on":
+        rung = checkjudge.scope_rung(cfg, implementer=first, difficulty=d.difficulty, risk=risk)
+        judges.append({"check": "scope", "rung": rung, "when": _WHEN["scope"]})
+    return {"planner": planner, "reviewer": reviewer, "judges": judges}
+
+
+def _explain(task, decision: Decision, features, roles: dict) -> str:
     src = decision.sources
     tags = ", ".join(sorted(decision.risk_tags)) or "-"
     ladder = " ".join(decision.ladder) or "-"
+    judges = ", ".join(f"{j['check']} {j['rung']} ({j['when']})" for j in roles["judges"]) or "-"
     reasons = ", ".join(decision.reasons) or "-"
     return "\n".join(
         (
@@ -220,6 +249,10 @@ def _explain(task, decision: Decision, features) -> str:
             f"risk: {decision.risk} ({src['risk']})",
             f"risk_tags: {tags}",
             f"ladder: {ladder}",
+            f"planner: {roles['planner'] or '-'}",
+            f"reviewer: {roles['reviewer'] or '-'}",
+            f"judges: {judges}",
+            *([f"run: stops with exit {roles['stop']['exit']}: {roles['stop']['reason']}"] if roles.get("stop") else []),
             f"needs_review: {decision.needs_review}",
             f"needs_clarification: {decision.needs_clarification}",
             f"load_bearing: {decision.load_bearing}",

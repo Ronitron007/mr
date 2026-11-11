@@ -214,6 +214,13 @@ def at_least(rung: str | None, floor: str) -> str:
     return floor if rung is None or STRENGTH.index(rung) < STRENGTH.index(floor) else rung
 
 
+def planner_rung(d: Decision, cfg: Config) -> str | None:
+    """The planner rung ``mr run`` calls before the first rung (a set planner, or cascade medium and up), else None."""
+    if d.planner or (d.route == "cascade" and _DIFF.index(d.difficulty) >= _DIFF.index("medium")):
+        return d.planner or cfg.planner.rungs[d.difficulty]
+    return None
+
+
 def require_strong(d: Decision) -> Decision:
     """High risk (path evidence): a planner of at least S+ (O when hard or critical) and an S+ review at least."""
     planner = "O" if d.difficulty in ("hard", "critical") else "S+"
