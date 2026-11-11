@@ -167,7 +167,8 @@ class TestAcceptanceGaps(unittest.TestCase):
             return proc
 
         with mock.patch.dict(os.environ, {'PYTHONWARNINGS': 'default'}):
-            with mock.patch('mr.acceptance.subprocess.Popen', side_effect=fake_popen):
+            with mock.patch('mr.acceptance.subprocess.Popen', side_effect=fake_popen), \
+                    mock.patch('mr.acceptance.purge_bytecode'):
                 acceptance.run_named(tempfile.gettempdir(), ['tests/test_x_mr.py'], 'unittest', 30)
                 self.assertTrue(captured)
                 argv, env, parent = captured[0]
