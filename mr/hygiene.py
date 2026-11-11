@@ -45,7 +45,7 @@ def _kill(pgid: int) -> None:
 
 
 def _run(tree: str, cmd: str, timeout_s) -> tuple[int, str, str, bool]:
-    with acceptance.fresh_bytecode() as env:
+    with acceptance.fresh_bytecode(tree) as env:
         return _run_in(tree, cmd, timeout_s, env)
 
 

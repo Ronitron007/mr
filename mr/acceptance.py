@@ -407,12 +407,30 @@ def _killpg(pgid: int, sig: int) -> None:
         pass
 
 
+def purge_bytecode(tree: str) -> None:
+    """Remove the untracked pycs under ``__pycache__`` in ``tree``, for a command that drops the environment
+    (``python -E``, ``env -i``, tox) and so ignores ``PYTHONPYCACHEPREFIX``. Tracked files stay."""
+    try:
+        done = subprocess.run(
+            ["git", "-C", tree, "ls-files", "-z", "--others", "--", ":(glob)**/__pycache__/*.pyc"],
+            capture_output=True, check=True, stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return
+    for rel in filter(None, done.stdout.split(b"\0")):
+        try:
+            os.remove(os.path.join(os.fsencode(tree), rel))
+        except OSError:
+            pass
+
+
 @contextmanager
-def fresh_bytecode(env: dict | None = None):
+def fresh_bytecode(tree: str, env: dict | None = None):
     """A copy of ``env`` (default: ``os.environ``) whose Python reads and writes bytecode only in a new empty
     directory, removed on exit. CPython reuses a ``__pycache__`` pyc whose source has the same size and whole-second
     mtime, so a same-second edit in the tree would run the old code. ``PYTHONDONTWRITEBYTECODE`` still reads that pyc;
     pytest's assertion rewrite also honors the prefix."""
+    purge_bytecode(tree)
     prefix = tempfile.mkdtemp(prefix="mr-pycache-")
     try:
         yield {**(os.environ if env is None else env), "PYTHONPYCACHEPREFIX": prefix}
@@ -421,7 +439,7 @@ def fresh_bytecode(env: dict | None = None):
 
 
 def _run_argv(argv: list[str], cwd: str, timeout_s: float, env: dict | None = None) -> tuple[int, str, bool]:
-    with fresh_bytecode(env) as run_env:
+    with fresh_bytecode(cwd, env) as run_env:
         return _run_argv_in(argv, cwd, timeout_s, run_env)
 
 

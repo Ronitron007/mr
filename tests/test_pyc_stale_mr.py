@@ -15,6 +15,7 @@ import unittest
 from unittest import mock
 
 from mr import acceptance, hygiene
+from tests.gitfix import git
 
 _OLD = "def f():\n    return 1\n"
 _NEW = "def f():\n    return 9\n"
@@ -31,6 +32,9 @@ _TEST = textwrap.dedent(
     """
 )
 _CMD = f"{shlex.quote(sys.executable)} -m unittest test_calc"
+# These commands drop PYTHONPYCACHEPREFIX, so only the purge of the tree's pycs protects them.
+_NO_ENV_CMDS = (f"{shlex.quote(sys.executable)} -E -m unittest test_calc",
+                f"env -i {shlex.quote(sys.executable)} -m unittest test_calc")
 
 
 class TestStaleBytecode(unittest.TestCase):
@@ -42,6 +46,7 @@ class TestStaleBytecode(unittest.TestCase):
         self.calc = os.path.join(self.tree, "calc.py")
         self._write("calc.py", _OLD)
         self._write("test_calc.py", _TEST)
+        git(self.tree, "init", "-q")
         env = mock.patch.dict(os.environ)  # bytecode writing on, whatever the shell sets
         env.start()
         self.addCleanup(env.stop)
@@ -57,6 +62,7 @@ class TestStaleBytecode(unittest.TestCase):
         cfile = os.path.join(self.tree, "__pycache__", f"calc.{sys.implementation.cache_tag}.pyc")
         py_compile.compile(self.calc, cfile=cfile, doraise=True,
                            invalidation_mode=py_compile.PycInvalidationMode.TIMESTAMP)
+        return cfile
 
     def _regress_in_same_second(self):
         stat = os.stat(self.calc)
@@ -68,6 +74,28 @@ class TestStaleBytecode(unittest.TestCase):
         self._cache_old_in_tree()
         self._regress_in_same_second()
         self.assertTrue(hygiene.run_checks(self.tree, [_CMD], 60))
+
+    def test_hygiene_command_without_the_environment_ignores_a_stale_pyc(self):
+        for cmd in _NO_ENV_CMDS:
+            with self.subTest(cmd=cmd):
+                self._write("calc.py", _OLD)
+                self._cache_old_in_tree()
+                self._regress_in_same_second()
+                self.assertTrue(hygiene.run_checks(self.tree, [cmd], 60))
+
+    def test_purge_keeps_tracked_files(self):
+        cfile = self._cache_old_in_tree()
+        note = os.path.join(self.tree, "__pycache__", "note.txt")
+        self._write(os.path.join("__pycache__", "note.txt"), "untracked, not a pyc\n")
+        git(self.tree, "add", "-f", os.path.relpath(cfile, self.tree))
+        git(self.tree, "commit", "-q", "-m", "track a pyc")
+        stray = os.path.join(self.tree, "pkg", "__pycache__", "stray.cpython-0.pyc")
+        os.makedirs(os.path.dirname(stray))
+        self._write(os.path.relpath(stray, self.tree), "")
+        acceptance.purge_bytecode(self.tree)
+        self.assertTrue(os.path.exists(cfile))
+        self.assertTrue(os.path.exists(note))
+        self.assertFalse(os.path.exists(stray))
 
     def test_hygiene_ignores_the_pyc_of_its_own_earlier_run(self):
         self.assertEqual(hygiene.run_checks(self.tree, [_CMD], 60), frozenset())
