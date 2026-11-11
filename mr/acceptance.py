@@ -407,21 +407,32 @@ def _killpg(pgid: int, sig: int) -> None:
         pass
 
 
-def purge_bytecode(tree: str) -> None:
+class StaleBytecode(Exception):
+    """An untracked pyc in the tree that mr cannot remove, so a command that drops the environment could run it."""
+
+
+def purge_bytecode(tree: str) -> list[str]:
     """Remove the untracked pycs under ``__pycache__`` in ``tree``, for a command that drops the environment
-    (``python -E``, ``env -i``, tox) and so ignores ``PYTHONPYCACHEPREFIX``. Tracked files stay."""
+    (``python -E``, ``env -i``, tox) and so ignores ``PYTHONPYCACHEPREFIX``. Tracked files stay. Returns the pycs
+    that remain. A tree git cannot list (not a repo) is left as is."""
+    env = {k: v for k, v in os.environ.items() if k not in ("GIT_DIR", "GIT_WORK_TREE", "GIT_INDEX_FILE")}
     try:
         done = subprocess.run(
             ["git", "-C", tree, "ls-files", "-z", "--others", "--", ":(glob)**/__pycache__/*.pyc"],
-            capture_output=True, check=True, stdin=subprocess.DEVNULL,
+            env=env, capture_output=True, check=True, stdin=subprocess.DEVNULL,
         )
     except (OSError, subprocess.CalledProcessError):
-        return
+        return []
+    stuck = []
     for rel in filter(None, done.stdout.split(b"\0")):
+        path = os.path.join(os.fsencode(tree), rel)
         try:
-            os.remove(os.path.join(os.fsencode(tree), rel))
-        except OSError:
+            os.remove(path)
+        except FileNotFoundError:
             pass
+        except OSError:
+            stuck.append(os.fsdecode(path))
+    return stuck
 
 
 @contextmanager
@@ -429,8 +440,10 @@ def fresh_bytecode(tree: str, env: dict | None = None):
     """A copy of ``env`` (default: ``os.environ``) whose Python reads and writes bytecode only in a new empty
     directory, removed on exit. CPython reuses a ``__pycache__`` pyc whose source has the same size and whole-second
     mtime, so a same-second edit in the tree would run the old code. ``PYTHONDONTWRITEBYTECODE`` still reads that pyc;
-    pytest's assertion rewrite also honors the prefix."""
-    purge_bytecode(tree)
+    pytest's assertion rewrite also honors the prefix. Raises StaleBytecode before the run when a pyc stays."""
+    if stuck := purge_bytecode(tree):
+        more = f" and {len(stuck) - 1} more" if len(stuck) > 1 else ""
+        raise StaleBytecode(f"mr cannot remove stale bytecode {stuck[0]}{more}; remove it or fix its permissions")
     prefix = tempfile.mkdtemp(prefix="mr-pycache-")
     try:
         yield {**(os.environ if env is None else env), "PYTHONPYCACHEPREFIX": prefix}
@@ -439,8 +452,11 @@ def fresh_bytecode(tree: str, env: dict | None = None):
 
 
 def _run_argv(argv: list[str], cwd: str, timeout_s: float, env: dict | None = None) -> tuple[int, str, bool]:
-    with fresh_bytecode(cwd, env) as run_env:
-        return _run_argv_in(argv, cwd, timeout_s, run_env)
+    try:
+        with fresh_bytecode(cwd, env) as run_env:
+            return _run_argv_in(argv, cwd, timeout_s, run_env)
+    except StaleBytecode as exc:  # fail closed: the command does not run, so no test passes
+        return 1, str(exc), False
 
 
 def _run_argv_in(argv: list[str], cwd: str, timeout_s: float, env: dict) -> tuple[int, str, bool]:

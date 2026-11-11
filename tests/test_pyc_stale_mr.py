@@ -83,19 +83,38 @@ class TestStaleBytecode(unittest.TestCase):
                 self._regress_in_same_second()
                 self.assertTrue(hygiene.run_checks(self.tree, [cmd], 60))
 
-    def test_purge_keeps_tracked_files(self):
+    def test_purge_removes_only_untracked_pycs_under_pycache(self):
+        self._write(".gitignore", "__pycache__/\n*.pyc\n")
         cfile = self._cache_old_in_tree()
         note = os.path.join(self.tree, "__pycache__", "note.txt")
-        self._write(os.path.join("__pycache__", "note.txt"), "untracked, not a pyc\n")
+        self._write(os.path.relpath(note, self.tree), "untracked, not a pyc\n")
         git(self.tree, "add", "-f", os.path.relpath(cfile, self.tree))
         git(self.tree, "commit", "-q", "-m", "track a pyc")
         stray = os.path.join(self.tree, "pkg", "__pycache__", "stray.cpython-0.pyc")
         os.makedirs(os.path.dirname(stray))
         self._write(os.path.relpath(stray, self.tree), "")
-        acceptance.purge_bytecode(self.tree)
+        legacy = os.path.join(self.tree, "legacy.pyc")
+        self._write("legacy.pyc", "")
+        # A hook can export GIT_INDEX_FILE; read with an empty index, the tracked pyc would look untracked.
+        with mock.patch.dict(os.environ, {"GIT_INDEX_FILE": os.path.join(self.tmp, "no-such-index")}):
+            self.assertEqual(acceptance.purge_bytecode(self.tree), [])
         self.assertTrue(os.path.exists(cfile))
         self.assertTrue(os.path.exists(note))
+        self.assertTrue(os.path.exists(legacy))
         self.assertFalse(os.path.exists(stray))
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root can remove a file in a read-only dir")
+    def test_a_stale_pyc_mr_cannot_remove_fails_the_run(self):
+        self._cache_old_in_tree()
+        self._regress_in_same_second()
+        cache = os.path.join(self.tree, "__pycache__")
+        os.chmod(cache, 0o555)
+        self.addCleanup(os.chmod, cache, 0o755)
+        for cmd in (_CMD, *_NO_ENV_CMDS):
+            with self.subTest(cmd=cmd):
+                self.assertEqual(hygiene.run_checks(self.tree, [cmd], 60), frozenset({f"cmd:{cmd}:exit1"}))
+        run = acceptance.run_named(self.tree, ["test_calc.py"], "unittest", 60)
+        self.assertIsNone(run.get(("test_calc.py", "test_f")))
 
     def test_hygiene_ignores_the_pyc_of_its_own_earlier_run(self):
         self.assertEqual(hygiene.run_checks(self.tree, [_CMD], 60), frozenset())
