@@ -443,7 +443,7 @@ def fresh_bytecode(tree: str, env: dict | None = None):
     pytest's assertion rewrite also honors the prefix. Raises StaleBytecode before the run when a pyc stays."""
     if stuck := purge_bytecode(tree):
         more = f" and {len(stuck) - 1} more" if len(stuck) > 1 else ""
-        raise StaleBytecode(f"mr cannot remove stale bytecode {stuck[0]}{more}; remove it or fix its permissions")
+        raise StaleBytecode(f"mr cannot remove stale bytecode {stuck[0]!r}{more}; remove it or fix its permissions")
     prefix = tempfile.mkdtemp(prefix="mr-pycache-")
     try:
         yield {**(os.environ if env is None else env), "PYTHONPYCACHEPREFIX": prefix}

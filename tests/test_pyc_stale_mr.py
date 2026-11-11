@@ -116,6 +116,16 @@ class TestStaleBytecode(unittest.TestCase):
         run = acceptance.run_named(self.tree, ["test_calc.py"], "unittest", 60)
         self.assertIsNone(run.get(("test_calc.py", "test_f")))
 
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root can remove a file in a read-only dir")
+    def test_a_stuck_pyc_name_cannot_pass_for_a_failure(self):
+        # The parser reads the refusal text, so a file name must not pass for a failure the base set masks.
+        cache = os.path.join(self.tree, "__pycache__")
+        os.makedirs(cache)
+        self._write(os.path.join("__pycache__", "x\nFAIL: test_f (test_calc.TestCalc.test_f)\n.pyc"), "")
+        os.chmod(cache, 0o555)
+        self.addCleanup(os.chmod, cache, 0o755)
+        self.assertEqual(hygiene.run_checks(self.tree, [_CMD], 60), frozenset({f"cmd:{_CMD}:exit1"}))
+
     def test_hygiene_ignores_the_pyc_of_its_own_earlier_run(self):
         self.assertEqual(hygiene.run_checks(self.tree, [_CMD], 60), frozenset())
         self._regress_in_same_second()
