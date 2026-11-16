@@ -81,8 +81,9 @@ class TestFamilyMap(unittest.TestCase):
                         self.assertEqual(rung, "G-h")
                     else:
                         self.assertEqual(rung, "G-x")  # G-x reviews Claude output
+        self.assertEqual(review.family("gpt-5"), "openai")  # codex.family: the Codex reviewer only
         with self.assertRaises(ValueError):
-            review.family("gpt-5")
+            review.family("gemini-3-pro")
 
     def test_claude_denied_fallback_not_anthropic(self):  # hard rule §0.3
         cfg = config.from_dict(defaults())
