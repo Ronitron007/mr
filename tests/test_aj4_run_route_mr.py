@@ -58,6 +58,10 @@ class OnCase(RunCase):
         super().setUp()
         self.scene(1)
 
+    def set_scenario(self, scenario, check=None):
+        super().set_scenario(scenario, check)
+        self.env['MR_TEST_TIME_SCALE'] = '1'
+
     def scene(self, runs):
         self.set_scenario({'cursor': {GL: [README] * runs}, 'claude': {HAIKU: [{'result': '{}'}] * (2 * runs)}})
         self.env['MR_HOME'] = self.home
