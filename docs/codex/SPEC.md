@@ -32,7 +32,7 @@ The Codex reviewer takes the place of `review.map[author]` when all of these con
 
 All other rules in `review.reviewer_rung` stay as they are. The rule `review.high_risk_grok` still picks the reviewer of a high-risk Grok change. A `required` Claude rung, which high-risk paths and the design route set, still reviews.
 
-The reason is that mr has no measure of Codex against `S+`. A strength floor that mr cannot compare stays with Claude until the measure step gives a number. The section `codex.open` asks Rohan about this rule.
+The reason is that mr has no measure of Codex against `S+`. A strength floor that mr cannot compare stays with Claude until the measure step gives a number. Rohan kept this rule (`codex.decisions`).
 
 ## Family rule `codex.family`
 
@@ -235,7 +235,7 @@ Codex calls do not count toward `caps.claude_rungs_per_task` or `caps.opus_rungs
 
 Each task record gets `cost.codex_calls`, the number of Codex runs that started. `claude_pts` stays null for a Codex row.
 
-If the ChatGPT plan buys credits after the cap, a Codex call past the cap costs money. No mr code can see this setting. The section `codex.open` asks Rohan about it.
+If the ChatGPT plan buys credits after the cap, a Codex call past the cap costs money. No mr code can see this setting. Rohan says the plan does not buy credits (`codex.decisions`).
 
 ## mr route and records `codex.route`
 
@@ -297,10 +297,12 @@ The research notes are in the session scratch file `lbyb.md`. No package wraps `
 | [Codex AGENTS.md guide](https://learn.chatgpt.com/docs/agent-configuration/agents-md) | Codex reads `AGENTS.md` from `CODEX_HOME` and from the repo. No documented switch turns this off. |
 | [openai/codex-plugin-cc](https://github.com/openai/codex-plugin-cc) | Codex reviews the work of another agent, read-only, on the local login and its usage limits. |
 
-## Open questions `codex.open`
+## Decisions `codex.decisions`
 
-- Which author families does Rohan opt in? The value `[claude]` replaces the Grok reviewer of Claude changes. The value `[claude, grok]` also moves the reviews of Grok changes from Sonnet to Codex. That uses ChatGPT quota in place of Claude quota.
+Rohan answered the open questions on 2026-11-16.
 
-- Can the Codex reviewer take the place of a `required` `S+` review on high-risk work? This spec says no until the measure step.
+- The opt-in value is `authors: [claude]`. Codex reviews changes from Claude rungs only. The reviews of Grok changes stay with Sonnet.
 
-- Does the ChatGPT plan of the bot buy credits after the cap? If yes, `calls_per_day` must have a value before the opt-in.
+- The Codex reviewer does not take the place of a `required` `S+` review. The `high_risk_grok` and `required` reviews stay with Claude.
+
+- The ChatGPT plan of the bot does not buy credits after the cap. Codex stops at the plan limit, and the cooldown in `codex.failure` handles it. `calls_per_day` stays `null`.
