@@ -63,6 +63,6 @@ A PR named `codex.failure_fixtures` then puts the real texts in the fake steps a
 
 This PR changes `README.md` and `CHANGELOG.md` at the repo root. Thus it is not a docs-only PR, and it waits for its review.
 
-## Open questions `plan.open`
+## Decisions `plan.decisions`
 
-The open questions are in `codex.open` in the spec. The answers change `codex.optin` only. No code unit waits for them.
+The answers are in `codex.decisions` in the spec. They change `codex.optin` only. The opt-in sets `review.codex.authors: [claude]`. No code unit waits for them.
