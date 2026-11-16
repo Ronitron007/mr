@@ -206,11 +206,14 @@ class TestTimeout(RunnerCase):
             fh.write(f"#!/bin/sh\nsleep 30 &\necho $! > {pidfile}\nsleep 30\n")
         os.chmod(script, os.stat(script).st_mode | stat.S_IXUSR)
         self.setup({}, cursor_agent=script)
+        t0 = time.monotonic()
         for timeout_s in (100, 1000):  # x0.01 => 1 s, then 10 s if the script was too slow to start
             res = self.cursor_run(timeout_s=timeout_s)
             self.assertTrue(res.timed_out)
             if os.path.exists(pidfile):
                 break
+        # A kill of the child pid alone leaves the grandchild holding stdout: communicate() waits ~30 s.
+        self.assertLess(time.monotonic() - t0, 25, "group kill did not end the run")
         with open(pidfile) as fh:
             pid = int(fh.read())
         deadline = time.monotonic() + 5
