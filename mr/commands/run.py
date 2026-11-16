@@ -448,6 +448,8 @@ def _body(c: _Ctx) -> int:
     if (code := pipeline.start(c)) is not None:
         return code
     d = c.d
+    if stop := loop.caps_stop([c.rung], cfg.caps):  # --once obeys the caps too: no model call
+        return c.stop(ec.NOT_ACCEPTED, stop)
 
     c.reset_tree = patches.take_reset_tree(repo)
     c.save_state("rung")
