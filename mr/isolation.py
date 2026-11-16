@@ -134,6 +134,10 @@ def protected(branch: str | None, patterns) -> bool:
     return any(fnmatch.fnmatchcase(branch, p) for p in patterns)
 
 
+def high_risk(path_tags) -> bool:
+    return bool(set(path_tags) & _HIGH_TAGS)
+
+
 def compute_inputs(repo, *, ro: bool, risk: str, difficulty: str, risk_tags, experiment: bool,
                    est_files: int = 0, est_loc: int = 0, parallel: bool = False,
                    owned_branch: str | None = None, other_writer: bool, cfg, path_tags=()) -> IsoInputs:
@@ -146,7 +150,7 @@ def compute_inputs(repo, *, ro: bool, risk: str, difficulty: str, risk_tags, exp
         DIRTY_FOREIGN=bool(_lines(repo, "status", "--porcelain")),
         PARALLEL=parallel,
         EXPERIMENT=experiment,
-        HIGH_RISK=bool(tags & _HIGH_TAGS),
+        HIGH_RISK=high_risk(tags),
         DEPS="deps" in tags,
         PROTECTED=protected(branch, cfg.worktrees["protected"]),
         OWNED_BRANCH=branch is not None and branch == owned_branch and branch.startswith("mr/"),

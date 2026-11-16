@@ -169,7 +169,7 @@ class TestAdvisor(NoHourCapCase):
                                        repo=self.home, files_named=[]),
             d=types.SimpleNamespace(route='cascade', type='bugfix', difficulty='hard', risk='medium',
                                     ambiguity='low', load_bearing=False),
-            checklist=None, rungs=[], log=[], seq=0)
+            checklist=None, rungs=[], log=[], seq=0, counters={'attempts': 0, 'claude_rungs': 0, 'opus_rungs': 0})
         with mock.patch.object(loop.guard, 'check', return_value=g):
             with mock.patch.object(loop.advisor, 'decide', side_effect=decide):
                 with mock.patch.object(loop, '_adv_counts', return_value=(0, 0)):
