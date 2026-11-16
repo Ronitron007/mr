@@ -41,6 +41,7 @@ class RunCase(unittest.TestCase):
     branch = "feature/x"
     repo_files = None
     hygiene_cmds = None
+    no_checks = True
 
     def setUp(self):
         self.dir = os.path.realpath(tempfile.mkdtemp(prefix="mr-run-"))
@@ -79,7 +80,11 @@ class RunCase(unittest.TestCase):
 
     def argv(self, *extra, text=TASK, rung="G-l", json_out=False):
         return (["--config", self.cfgpath] + (["--json"] if json_out else []) +
-                ["run", text, "--repo", self.repo, "--rung", rung, "--once", *extra])
+                ["run", text, "--repo", self.repo, "--rung", rung, "--once", *self.waive(), *extra])
+
+    def waive(self):
+        """--no-checks for a case on a repo with no hygiene commands; the gate itself is tested in gate.no_checks."""
+        return ["--no-checks"] if self.no_checks and not self.hygiene_cmds else []
 
     def mr(self, *extra, **kw):
         out, err = io.StringIO(), io.StringIO()

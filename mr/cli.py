@@ -144,6 +144,7 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--rung")
     run.add_argument("--once", action="store_true")
     run.add_argument("--dry-run", action="store_true")
+    run.add_argument("--no-checks", action="store_true", help="run even when the repo has no hygiene commands")
     route = sp.add_parser("route", help="Dry run routing")
     route.add_argument("task", nargs="?", default=None)
     route.add_argument("-f", "--file", dest="task_file")
@@ -188,6 +189,7 @@ def _cmd_parser(cmd: str) -> argparse.ArgumentParser:
         p.add_argument("--rung")
         p.add_argument("--once", action="store_true")
         p.add_argument("--dry-run", action="store_true")
+        p.add_argument("--no-checks", action="store_true", help="run even when the repo has no hygiene commands")
     elif cmd == "route":
         p.add_argument("task", nargs="?", default=None)
         p.add_argument("-f", "--file", dest="task_file")

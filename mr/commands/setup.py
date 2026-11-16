@@ -157,6 +157,8 @@ def _emit(args, path: str, providers: list[str], written: bool, document: str) -
     print(path)
     for pid in providers:
         print(pid)
+    print(f"add hygiene.commands.<repo> to {path}: mr run exits 4 for a repo with no hygiene commands "
+          "unless you pass --no-checks")
     print('mr route --explain "<task>"')
     print("mr run")
 
