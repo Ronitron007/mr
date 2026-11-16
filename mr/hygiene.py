@@ -45,8 +45,16 @@ def _kill(pgid: int) -> None:
 
 
 def _run(tree: str, cmd: str, timeout_s) -> tuple[int, str, str, bool]:
+    try:
+        with acceptance.fresh_bytecode(tree) as env:
+            return _run_in(tree, cmd, timeout_s, env)
+    except acceptance.StaleBytecode as exc:  # fail closed: a failure the base set cannot mask, or a base refusal
+        return 1, "", str(exc), False
+
+
+def _run_in(tree: str, cmd: str, timeout_s, env: dict) -> tuple[int, str, str, bool]:
     proc = subprocess.Popen(
-        cmd, cwd=tree, shell=True, stdin=subprocess.DEVNULL,
+        cmd, cwd=tree, shell=True, env=env, stdin=subprocess.DEVNULL,
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, start_new_session=True)
     try:
         out_b, err_b = proc.communicate(timeout=float(timeout_s) * _scale())
