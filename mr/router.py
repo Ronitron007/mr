@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 
 from mr import facts as facts_mod
 from mr import prepass, shadow
-from mr.config import Config, _match
+from mr.config import CODEX_ALLOWED, Config, _match
 from mr.prepass import Features
 from mr.task import Task
 
@@ -339,7 +339,7 @@ def _keeps(cfg: Config, code: str, budget: str) -> bool:
 def _allowed(cfg: Config, rung) -> bool:
     patterns: list[str] = []
     for entry in cfg.allowed:
-        if not isinstance(entry, str) or entry.startswith("judge:"):
+        if not isinstance(entry, str) or entry.startswith(("judge:", CODEX_ALLOWED)):
             continue
         patterns.append(entry if entry.startswith(("cursor:", "max:")) else "cursor:" + entry)
     return _match(f"{rung.path}:{rung.model}", patterns)

@@ -19,10 +19,12 @@ _PROMPT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 
 def family(model: str) -> str:
-    """Model name -> family: grok-*, kimi-*, composer-*, claude-*."""
+    """Model name -> family: grok-*, kimi-*, composer-*, claude-*, and gpt-* (openai, the Codex reviewer)."""
     for fam in ("grok", "kimi", "composer", "claude"):
         if model.startswith(fam + "-"):
             return fam
+    if model.startswith("gpt-"):
+        return "openai"
     raise ValueError(f"unknown model family: {model!r}")
 
 

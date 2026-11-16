@@ -38,6 +38,11 @@ ANTHROPIC_MSG = "Anthropic models run only via the claude CLI (hard rule)"
 # droid BYOK: provider -> custom-model baseUrl and default key env var (the only place this table lives)
 DROID_PROVIDERS: dict = {"anthropic": {"base_url": "https://api.anthropic.com", "key_env": "ANTHROPIC_API_KEY"}}
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
+CODEX_CODE = "CX"
+CODEX_ALLOWED = "review:codex:"  # role-scoped: signal C via the codex CLI only; never a rung
+CODEX_AUTHORS = ("grok", "kimi", "composer", "claude")
+CODEX_DEFAULTS: dict = {"authors": [], "model": "gpt-6.1-sol", "effort": "high", "recheck_s": 3600,
+                        "calls_per_day": None}
 
 
 def is_anthropic(model: str) -> bool:
@@ -68,6 +73,7 @@ class Paths:
     cursor_agent: str
     home: str
     droid: str = "droid"
+    codex: str = "codex"
 
 
 @dataclass(frozen=True)
@@ -110,11 +116,22 @@ class GuardCfg:
 
 
 @dataclass(frozen=True)
+class CodexCfg:
+    authors: frozenset[str]
+    model: str
+    effort: str
+    recheck_s: int
+    calls_per_day: int | None
+    rung: Rung  # code CX, path codex: never in Config.rungs, so no ladder, planner or fallback can name it
+
+
+@dataclass(frozen=True)
 class ReviewCfg:
     map: dict[str, str]
     high_risk_grok: str
     tiebreak: str
     claude_denied: str
+    codex: CodexCfg
 
 
 @dataclass(frozen=True)
@@ -203,6 +220,7 @@ def validate(raw: dict) -> list[str]:
     attempts = _attempts(raw)
     warnings = _ladders(raw, rungs, attempts)
     _uses(raw, rungs, patterns)
+    _codex_block(raw)
     _classifier(raw, patterns)
     _judge(raw)
     _droid(raw)
@@ -227,6 +245,11 @@ def rung(cfg: Config, code: str) -> Rung:
         return cfg.rungs[code]
     except KeyError:
         raise ConfigError(f"rungs.{code}: rung {code!r} not defined") from None
+
+
+def reviewer_spec(cfg: Config, code: str) -> Rung:
+    """A signal C reviewer: a rung, or the Codex reviewer CX."""
+    return cfg.review.codex.rung if code == CODEX_CODE else rung(cfg, code)
 
 
 def _deep_merge(base, over):
@@ -311,6 +334,10 @@ def _allowed(raw: dict) -> list[str]:
         if _CURSOR_HAIKU.search(entry):
             raise ConfigError(f"allowed[{i}]: cursor-prefixed haiku")
         if entry.startswith("judge:"):
+            continue
+        if entry.startswith(CODEX_ALLOWED):
+            if not fnmatch.fnmatchcase(entry[len(CODEX_ALLOWED):], "gpt-*"):
+                raise ConfigError(f"allowed[{i}]: {entry!r} must name a gpt-* model")
             continue
         pat = entry if entry.startswith(("cursor:", "max:")) else "cursor:" + entry
         if pat.startswith("cursor:") and is_anthropic(pat.split(":", 1)[1]):
@@ -442,6 +469,37 @@ def _uses(raw: dict, rungs: dict, patterns: list[str]) -> None:
         _code(entry, path, rungs)
     if "map_to_cascade" in design and not isinstance(design["map_to_cascade"], bool):
         raise ConfigError("design_route.map_to_cascade: must be true or false")
+
+
+def _codex_block(raw: dict) -> dict:
+    """``review.codex``, filled with the defaults. ``authors: []`` is off."""
+    block = raw["review"].get("codex")
+    if block is None:
+        block = {}
+    if not isinstance(block, dict):
+        raise ConfigError("review.codex: expected a mapping")
+    out = {**CODEX_DEFAULTS, **block}
+    for key in out:
+        if key not in CODEX_DEFAULTS:
+            raise ConfigError(f"review.codex.{key}: unknown key")
+    authors = out["authors"]
+    if not isinstance(authors, list) or any(a not in CODEX_AUTHORS for a in authors):
+        raise ConfigError(f"review.codex.authors: must be a list of {', '.join(CODEX_AUTHORS)}")
+    model = out["model"]
+    if not isinstance(model, str) or not fnmatch.fnmatchcase(model, "gpt-*"):
+        raise ConfigError("review.codex.model: must match gpt-*")
+    scoped = [e[len(CODEX_ALLOWED):] for e in raw["allowed"] if isinstance(e, str) and e.startswith(CODEX_ALLOWED)]
+    if authors and not _match(model, scoped):
+        raise ConfigError(f"review.codex.model: {model!r} matches no {CODEX_ALLOWED!r} allowed entry")
+    if out["effort"] not in EFFORTS:  # ultra starts sub-agents mr does not control
+        raise ConfigError("review.codex.effort: must be low, medium, high, xhigh, or max")
+    if not _pos_int(out["recheck_s"]):
+        raise ConfigError("review.codex.recheck_s: must be an int > 0")
+    if out["calls_per_day"] is not None and not _pos_int(out["calls_per_day"]):
+        raise ConfigError("review.codex.calls_per_day: must be null or an int > 0")
+    if CODEX_CODE in raw["rungs"]:
+        raise ConfigError(f"rungs.{CODEX_CODE}: reserved for the Codex reviewer")
+    return out
 
 
 def _risk_block(raw: dict) -> dict:
@@ -886,10 +944,11 @@ def _paths(raw: dict) -> list[str]:
         if not paths[key]:
             raise ConfigError(f"paths.{key}: missing")
         _command_path(paths[key], key)
-    if "droid" in paths:
-        if not isinstance(paths["droid"], str) or not paths["droid"]:
-            raise ConfigError("paths.droid: missing")
-        _command_path(paths["droid"], "droid")
+    for key in ("droid", "codex"):
+        if key in paths:
+            if not isinstance(paths[key], str) or not paths[key]:
+                raise ConfigError(f"paths.{key}: missing")
+            _command_path(paths[key], key)
     if paths["check"] and not os.path.isabs(paths["check"]):
         raise ConfigError("paths.check: must be absolute")
     if not paths["home"]:
@@ -960,10 +1019,11 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
         classifier["mode"] = _canon_mode(classifier["mode"], "classifier.mode")
     guard = raw["guard"]
     timeouts = raw["timeouts"]
+    codex = _codex_block(raw)
     return Config(
         version=1,
         paths=Paths(raw["paths"]["claude"], raw["paths"]["check"], raw["paths"]["cursor_agent"], raw["paths"]["home"],
-                    raw["paths"].get("droid", "droid")),
+                    raw["paths"].get("droid", "droid"), raw["paths"].get("codex", "codex")),
         allowed=tuple(raw["allowed"]),
         rungs=rungs,
         ladders=ladders,
@@ -1000,6 +1060,8 @@ def _build(raw: dict, source: str, warnings: list[str]) -> Config:
             high_risk_grok=raw["review"]["high_risk_grok"],
             tiebreak=raw["review"]["tiebreak"],
             claude_denied=raw["review"]["claude_denied"],
+            codex=CodexCfg(frozenset(codex["authors"]), codex["model"], codex["effort"], codex["recheck_s"],
+                           codex["calls_per_day"], Rung(CODEX_CODE, codex["model"], "codex", codex["effort"])),
         ),
         planner=PlannerCfg(
             rungs=dict(raw["planner"]["rungs"]),

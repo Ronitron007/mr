@@ -9,10 +9,12 @@ paths:
   check: ""
   cursor_agent: cursor-agent
   droid: droid                                 # command name or absolute path (Factory droid CLI, BYOK backend)
+  codex: codex                                 # command name or absolute path (OpenAI Codex CLI, signal C reviewer CX)
   home: ""
 allowed: [grok-4.7-*, composer-2.5, composer-2.5-fast, kimi-k3-low, kimi-k3-high, kimi-k3-max, kimi-k2.7-code,
           max:claude-sonnet-5-5, max:claude-opus-5-5,   # no cursor:claude-* (hard rule §0.3)
-          "judge:max:claude-haiku-5-5"]   # role-scoped: judge only, claude CLI only; never a rung, never cursor-agent
+          "judge:max:claude-haiku-5-5",   # role-scoped: judge only, claude CLI only; never a rung, never cursor-agent
+          "review:codex:gpt-6.1-sol"]     # role-scoped: signal C via the codex CLI only; never a rung
 rungs:
   G-l: {model: grok-4.7-low, path: cursor}
   G-m: {model: grok-4.7-medium, path: cursor}
@@ -54,7 +56,8 @@ fallback_claude_denied: [G-x]   # non-Anthropic only; cursor_same_tier removed (
 claude_limits: {hour_max: null, five_hour_max: 85}   # hour_max null = no hourly cap; five_hour_max shared by the rung guard and the judge
 guard: {probe_if_sample_older_s: 600, wait_lock_s: 600,   # est held constant in v1 (§8)
         est_seed: {S: 4, S+: 6, S+A: 12, O: 10, O+: 15, PLAN_O: 12, C+: 3}, reservation_ttl_s: 3600}
-review: {map: {grok: S, kimi: G-h, composer: G-h, claude: G-x}, high_risk_grok: S, tiebreak: S, claude_denied: C25}
+review: {map: {grok: S, kimi: G-h, composer: G-h, claude: G-x}, high_risk_grok: S, tiebreak: S, claude_denied: C25,
+         codex: {authors: [], model: gpt-6.1-sol, effort: high, recheck_s: 3600, calls_per_day: null}}   # authors [] = off; e.g. [claude]. effort low..max, never ultra; recheck_s = cooldown after an auth or usage-limit failure; calls_per_day null = no cap
 planner: {rungs: {trivial: G-h, easy: G-h, medium: G-h, hard: O, critical: O}, claude_denied: G-h}   # rung by task difficulty; O only via the claude CLI; not a ladder rung (no claude_rungs/opus_rungs count)
 plan: {judge: "on"}               # on | off. on = a broken plan is repaired, retried, re-planned on a stronger planner, then the task runs without a plan; off = exit 3 after two invalid plans
 check_judge: {plan_rung: S, plan_rung_strong: S+, max_plan_calls: 2, scope: "on", scope_rung: S, scope_rung_strong: S+, max_scope_calls: 3, timeout_s: 300, defer: "on"}   # Sonnet check judge only (S; S+ for O/O+ planners or an S/S+ author, hard or high-risk work). plan: judges a plan still invalid after repair and retry, at most 2 decisions per task, only when plan.judge is on. scope: on = signal D findings go to the judge after H and A pass (only a locked-test edit or a sensitive path outside the scope fails by itself), at most 3 decisions per task; off = any D reason is off_track. defer: on = a judge that cannot run (guard says no, CLI error, invalid twice) parks the task: exit 75, queued, mr resume <task> continues; off = a plan judge failure goes to the stronger re-plan and a scope judge failure rejects the attempt
