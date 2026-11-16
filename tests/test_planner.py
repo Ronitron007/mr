@@ -281,7 +281,8 @@ class TestPlan(unittest.TestCase):
             scenario["claude"] = {_OPUS: claude}
         path = gitfix.write_scenario(self.dir, scenario)
         check = gitfix.write_check(self.dir, {"default": dict(_CHECK_OK, **(check or {}))})
-        patcher = mock.patch.dict(os.environ, gitfix.fake_env(path, check))
+        # Real-time budgets; the timeout tests patch a small scale on top.
+        patcher = mock.patch.dict(os.environ, dict(gitfix.fake_env(path, check), MR_TEST_TIME_SCALE="1"))
         patcher.start()
         self.addCleanup(patcher.stop)
         self.scenario = path

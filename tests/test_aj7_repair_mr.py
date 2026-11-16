@@ -199,7 +199,8 @@ class TestPlanStatus(unittest.TestCase):
         sdir = tempfile.mkdtemp(dir=self.dir)
         path = gitfix.write_scenario(sdir, {'cursor': {'grok-4.7-high': steps}})
         check = gitfix.write_check(sdir, {'default': dict(CHECK_OK)})
-        env = dict(gitfix.fake_env(path, check), MR_HOME=self.home)
+        # Real-time budgets; the timeout test patches a small scale on top.
+        env = dict(gitfix.fake_env(path, check), MR_HOME=self.home, MR_TEST_TIME_SCALE='1')
         patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
