@@ -17,7 +17,8 @@ def said(status, pushback=SCOPE_NEEDED):
 
 
 class TestCodexRepro(LoopCase):
-    """The `incomplete-self-report-accepted` reproduction: easy code task, no hygiene, no planner, no reviewer."""
+    """The `incomplete-self-report-accepted` reproduction: easy code task, no hygiene, no planner, no reviewer.
+    No hygiene commands, so each run passes --no-checks (gate.no_checks refuses it otherwise)."""
     repo_files = {"calc.py": "def old():\n    return 1\n"}
 
     def write_cfg(self):
@@ -31,7 +32,7 @@ class TestCodexRepro(LoopCase):
         self.set_scenario({"cursor": {GH: [step], GM: [step]},
                            "claude": {SONNET: [step], OPUS: [step]}})
         code, doc, err = self.run_json("--type", "code", "--difficulty", "easy", "--rung", "G-h",
-                                       text="update calc.py")
+                                       "--no-checks", text="update calc.py")
         return code, self.state_of(doc["task"]), err
 
     def test_blocked_comment_only_is_not_accepted(self):
