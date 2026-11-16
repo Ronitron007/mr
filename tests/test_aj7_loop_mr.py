@@ -47,6 +47,7 @@ class PlanCase(LoopCase):
     def set_scenario(self, scenario, check=None):
         super().set_scenario(scenario, check)
         self.env['MR_HOME'] = self.home
+        self.env['MR_TEST_TIME_SCALE'] = '1'  # real-time budgets under load
 
     def run_raw(self):
         code, out, err = self.mr(*MEDIUM)
@@ -105,8 +106,14 @@ class TestPlanJudgeOn(PlanCase):
         self.assert_schema()
 
     def test_planner_infra_twice_defers_with_state_saved(self):
+        # Only the planner budget is short (3 s, enough for a slow fake start under load).
+        # A small time scale would also cut the hygiene and judge budgets.
+        with open(self.cfgpath, encoding='utf-8') as fh:
+            raw = json.load(fh)
+        raw.setdefault('timeouts', {})['planner_s'] = 3
+        with open(self.cfgpath, 'w', encoding='utf-8') as fh:
+            json.dump(raw, fh)
         self.set_scenario({'cursor': {GH: [{'sleep_s': 100000}]}, 'claude': {SONNET: [{'result': 'not json'}]}})
-        self.env['MR_TEST_TIME_SCALE'] = '0.002'
         code, doc, text = self.run_raw()
         self.assertEqual(code, 75, text)
         self.assertEqual(doc['outcome'], 'deferred')

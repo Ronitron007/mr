@@ -3,6 +3,7 @@
 import json
 import os
 import stat
+import subprocess
 import tempfile
 import time
 import unittest
@@ -22,14 +23,14 @@ SONNET, OPUS = "claude-sonnet-5-5", "claude-opus-5-5"
 
 
 def _dead(pid):
-    try:
-        with open(f"/proc/{pid}/stat") as fh:
-            return fh.read().rsplit(")", 1)[1].split()[0] == "Z"
-    except OSError:
-        return True
+    """True when pid is gone or a zombie. ps works on Linux and macOS (no /proc there)."""
+    ps = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True)
+    return ps.returncode != 0 or ps.stdout.strip().startswith("Z")
 
 
 class RunnerCase(unittest.TestCase):
+    time_scale = "1"  # real-time budgets: a slow fake start under load must not time out
+
     def setUp(self):
         td = tempfile.TemporaryDirectory()
         self.addCleanup(td.cleanup)
@@ -42,7 +43,8 @@ class RunnerCase(unittest.TestCase):
         sp = gitfix.write_scenario(self.dir, scenario)
         cp = gitfix.write_check(self.dir, {"default": dict(CHECK_DEFAULT)})
         self.sp = sp
-        patcher = mock.patch.dict(os.environ, gitfix.fake_env(sp, cp))
+        env = dict(gitfix.fake_env(sp, cp), MR_TEST_TIME_SCALE=self.time_scale)
+        patcher = mock.patch.dict(os.environ, env)
         patcher.start()
         self.addCleanup(patcher.stop)
         paths = {"home": self.home, "cursor_agent": self.cursor,
@@ -185,6 +187,8 @@ class TestEnvAndCapture(RunnerCase):
 
 
 class TestTimeout(RunnerCase):
+    time_scale = "0.01"  # these tests need the timeout to fire
+
     def test_timeout_killpg(self):
         self.setup({"cursor": {"m-slow": [{"sleep_s": 100000}]}})  # x0.01 => 1000 s
         t0 = time.monotonic()
@@ -202,8 +206,11 @@ class TestTimeout(RunnerCase):
             fh.write(f"#!/bin/sh\nsleep 30 &\necho $! > {pidfile}\nsleep 30\n")
         os.chmod(script, os.stat(script).st_mode | stat.S_IXUSR)
         self.setup({}, cursor_agent=script)
-        res = self.cursor_run(timeout_s=100)
-        self.assertTrue(res.timed_out)
+        for timeout_s in (100, 1000):  # x0.01 => 1 s, then 10 s if the script was too slow to start
+            res = self.cursor_run(timeout_s=timeout_s)
+            self.assertTrue(res.timed_out)
+            if os.path.exists(pidfile):
+                break
         with open(pidfile) as fh:
             pid = int(fh.read())
         deadline = time.monotonic() + 5
