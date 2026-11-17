@@ -12,6 +12,7 @@ import subprocess
 _HERE = os.path.dirname(os.path.abspath(__file__))
 FAKE_CURSOR = os.path.join(_HERE, "fakes", "fake_cursor_agent.py")
 FAKE_CLAUDE = os.path.join(_HERE, "fakes", "fake_claude.py")
+FAKE_CODEX = os.path.join(_HERE, "fakes", "fake_codex.py")
 FAKE_CHECK = os.path.join(_HERE, "fakes", "fake_check.sh")
 
 _GIT_ENV = {

@@ -1,12 +1,14 @@
-"""CLI runners: cursor-agent and Claude subprocesses (mr-spec §5.7, §10.3, §10.4)."""
+"""CLI runners: cursor-agent, Claude, droid and Codex subprocesses (mr-spec §5.7, §10.3, §10.4)."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
 import subprocess
 import time
 from dataclasses import dataclass
+from typing import Literal
 
 from mr import advisor, config, droid, guard
 
@@ -27,6 +29,18 @@ DISALLOWED_TOOLS = (
 _children: set[int] = set()  # pgids of live children (for the signal handler)
 # claude keeps using the Max plan and droid never bills Factory credits: these keys reach no claude/cursor child
 _DROPPED_KEYS = frozenset({"OPENROUTER_API_KEY", "ANTHROPIC_API_KEY", "FACTORY_API_KEY"})
+_CODEX_KEYS = frozenset({"OPENAI_API_KEY", "CODEX_API_KEY"})  # codex keeps the ChatGPT login, never the OpenAI API
+
+CodexFailure = Literal["auth", "auth_api_key", "usage_limit", "timeout", "crash", "contract"]
+CODEX_LOGIN_TIMEOUT_S = 30
+# Guesses until the paid smoke run codex.smoke (docs/codex/PLAN.md) checks them: the -c keys codex must accept,
+# and every text below except "Logged in using ChatGPT" (seen from codex-cli 0.149.1 login status, on stderr).
+CODEX_LOCKDOWN = ("-c", 'approval_policy="never"', "-c", 'web_search="disabled"', "-c", "features.hooks=false")
+CODEX_LOGIN_CHATGPT, CODEX_LOGIN_API_KEY = "chatgpt", "api key"
+CODEX_FAILURE_TEXTS: tuple[tuple[CodexFailure, tuple[str, ...]], ...] = (
+    ("auth", ("401", "unauthorized", "login")),
+    ("usage_limit", ("usage limit", "rate limit", "quota", "429")),
+)
 
 
 @dataclass(frozen=True)
@@ -47,8 +61,9 @@ class RunResult:
     usd_equiv: float | None = None
     turns: int | None = None
     model_drift: bool = False
-    backend: str | None = None  # "cursor" | "claude" | "droid"
+    backend: str | None = None  # "cursor" | "claude" | "droid" | "codex"
     droid_failure: str | None = None  # droid only: None on success, else droid.classify_failure
+    codex_failure: CodexFailure | None = None  # codex only: None on success, else codex_failure or the preflight
 
 
 # --- parsing ----------------------------------------------------------------
@@ -154,6 +169,19 @@ def droid_child_env(cfg) -> dict:
             env[name] = os.environ[name]
     env.pop("FACTORY_API_KEY", None)
     return env
+
+
+def codex_argv(cfg, prompt: str, tree: str, last_path: str) -> list[str]:
+    """The only place the codex argv is built (docs/codex/SPEC.md codex.run)."""
+    cx = cfg.review.codex
+    return [cfg.paths.codex, "exec", "--json", "--color", "never", "-o", last_path,
+            "-m", cx.model, "-c", f'model_reasoning_effort="{cx.effort}"', "-s", "read-only", *CODEX_LOCKDOWN,
+            "--ignore-user-config", "--ignore-rules", "--ephemeral", "-C", tree, prompt]
+
+
+def codex_child_env() -> dict:
+    """child_env(False), push block kept, without the OpenAI API keys (codex.env)."""
+    return {k: v for k, v in child_env(False).items() if k not in _CODEX_KEYS}
 
 
 def claude_argv_tail(cfg, rung: str, prompt: str, permission_mode: str,
@@ -318,6 +346,83 @@ def run_droid(code: str, twin: dict, prompt: str, tree: str, timeout_s: int, *,
         stderr_tail=tail, timed_out=timed_out, has_envelope=env is not None,
         session_id=sid if isinstance(sid, str) else None, turns=int(turns) if _num(turns) else None,
         backend="droid", droid_failure=droid.classify_failure(text, tail) if is_error else None)
+
+
+def codex_failure(text: str, stderr_tail: str, timed_out: bool) -> CodexFailure:
+    """The class of a failed codex run; text is the turn.failed or error event message (codex.failure)."""
+    if timed_out:
+        return "timeout"
+    hay = f"{text}\n{stderr_tail}".lower()
+    for cls, needles in CODEX_FAILURE_TEXTS:
+        if any(n in hay for n in needles):
+            return cls
+    return "crash"
+
+
+def _login_failure(rc: int, status: str, timed_out: bool) -> CodexFailure | None:
+    status = status.lower()
+    if rc != 0 or timed_out:
+        return "auth"
+    if CODEX_LOGIN_API_KEY in status:  # an API key login bills the OpenAI API: refused
+        return "auth_api_key"
+    return None if CODEX_LOGIN_CHATGPT in status else "auth"
+
+
+def _codex_events(out: str) -> tuple[str, dict, str | None, bool]:
+    """(last agent_message text, last turn.completed usage, failure message or None, saw turn.completed)."""
+    agent, usage, failed, completed = "", {}, None, False
+    for line in out.splitlines():
+        try:
+            ev = json.loads(line)
+        except ValueError:
+            continue
+        if not isinstance(ev, dict):
+            continue
+        typ, item = ev.get("type"), ev.get("item")
+        if typ == "turn.completed":
+            completed = True
+            usage = ev["usage"] if isinstance(ev.get("usage"), dict) else {}
+        elif typ in ("turn.failed", "error"):
+            src = ev.get("error") if typ == "turn.failed" else ev
+            msg = src.get("message") if isinstance(src, dict) else None
+            failed = msg if isinstance(msg, str) else ""
+        elif typ == "item.completed" and isinstance(item, dict) and item.get("type") == "agent_message":
+            agent = item.get("text") if isinstance(item.get("text"), str) else ""
+    return agent, usage, failed, completed
+
+
+def run_codex(cfg, prompt: str, tree: str, timeout_s: int, *, task: str, attempt: int) -> RunResult:
+    """The only entry point for the Codex reviewer: a free `codex login status` preflight, then one
+    read-only `codex exec`. No exec starts after an auth failure (codex.auth)."""
+    model = cfg.review.codex.model
+    base = _raw_base(cfg, task, attempt, model)
+    last = f"{base}.last"
+    with contextlib.suppress(FileNotFoundError):  # a re-ask or a later attempt reuses the name
+        os.remove(last)
+    env = codex_child_env()
+    rc, out, err, wall_s, timed_out = exec_child(
+        [cfg.paths.codex, "login", "status"], tree, env, CODEX_LOGIN_TIMEOUT_S, f"{base}-login")
+    refused = _login_failure(rc, out + err, timed_out)
+    if refused:
+        return RunResult(rc=rc, is_error=True, result_text="", usage={}, model_used=model, wall_s=wall_s,
+                         duration_ms=None, mr_result=None, raw_path=f"{base}-login",
+                         stderr_tail=err[-STDERR_TAIL_CHARS:], backend="codex", codex_failure=refused)
+    rc, out, err, wall_s, timed_out = exec_child(codex_argv(cfg, prompt, tree, last), tree, env, timeout_s, base)
+    try:
+        with open(last, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except FileNotFoundError:
+        text = ""
+    agent, usage, failed, completed = _codex_events(out)
+    if not text.strip():
+        text = agent
+    tail = err[-STDERR_TAIL_CHARS:]
+    is_error = rc != 0 or timed_out or failed is not None or not text.strip()
+    return RunResult(
+        rc=rc, is_error=is_error, result_text=text, usage=usage, model_used=model, wall_s=wall_s,
+        duration_ms=None, mr_result=parse_mr_result(text), raw_path=base, stderr_tail=tail, timed_out=timed_out,
+        has_envelope=completed, backend="codex",
+        codex_failure=codex_failure(failed or "", tail, timed_out) if is_error else None)
 
 
 def _claude_result(rung_model: str, rc: int, out: str, err: str, wall_s: float,
